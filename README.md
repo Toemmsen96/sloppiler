@@ -51,7 +51,9 @@ MODEL=codellama ./run.sh main.c hello
 | `-model` | `llama3` | Ollama model to use |
 | `-o` | `a.out` | Output binary path |
 | `-ollama` | `http://localhost:11434/api/generate` | Ollama API URL |
-| `--optimistic` | false | Ask the LLM for assembly and actually try to assemble it |
+| `--optimistic` | false | Engage agentic assembly co-pilot (requires nasm + ld) |
+| `--loop N` | 0 | Re-align LLM outputs with ground truth up to N times on nasm failure |
+| `--force-iterate N` | 0 | Proactively enhance output quality for N cycles even on success |
 
 ## Compilation Modalities
 
@@ -73,6 +75,22 @@ Engages the LLM as a strategic assembly generation partner, then routes output t
 ./sloppiler --optimistic -model codellama main.c -o hello
 ./hello
 # zsh: segmentation fault (core dumped) ./hello
+```
+
+### Loop Mode (`--loop N`) — *Closed-Loop Error Remediation*
+
+When nasm fails, the errors and broken assembly are fed back to the LLM for up to N fix attempts. The LLM will read its own mistakes, nod seriously, and produce new mistakes.
+
+```sh
+./sloppiler --optimistic --loop 5 -model codellama main.c -o hello
+```
+
+### Force Iterate Mode (`--force-iterate N`) — *Continuous Improvement Pipeline*
+
+Even when assembly succeeds, forces N additional improvement cycles where the LLM is asked to enhance what it already wrote. Each cycle compiles and re-feeds the result. There is a non-trivial probability that the LLM will improve a working binary into a broken one.
+
+```sh
+./sloppiler --optimistic --force-iterate 3 -model codellama main.c -o hello
 ```
 
 ## Model recommendations

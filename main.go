@@ -110,6 +110,17 @@ Source code to compile:
 
 NASM assembly output:`
 
+const improvePrompt = `You are NASM. You wrote the following assembly and it compiled successfully.
+
+Now improve it. Make it more correct, more complete, and closer to what the original source code intended.
+Output ONLY the improved NASM assembly. No explanation. No markdown. No code fences. Nothing after the last instruction.
+All rules still apply: valid NASM syntax only, every referenced label must be defined, use syscall not int 0x80, no MASM syntax.
+
+Current assembly:
+%s
+
+Improved NASM assembly output:`
+
 const fixPrompt = `You are NASM. You wrote the following assembly and it failed to assemble.
 
 NASM error output:
@@ -162,6 +173,7 @@ func reorderArgs(args []string) []string {
 		"-o": true, "--o": true,
 		"-ollama": true, "--ollama": true,
 		"-loop": true, "--loop": true,
+		"-force-iterate": true, "--force-iterate": true,
 	}
 	var flags, positional []string
 	for i := 0; i < len(args); i++ {
@@ -193,6 +205,7 @@ func main() {
 	ollamaHost := flag.String("ollama", ollamaURL, "Ollama API URL")
 	optimistic := flag.Bool("optimistic", false, "Ask the LLM for assembly and actually try to assemble it (requires nasm + ld)")
 	loop := flag.Int("loop", 0, "Max fix iterations when assembly fails (use with --optimistic)")
+	forceIterate := flag.Int("force-iterate", 0, "Force N improvement cycles even when assembly succeeds (use with --optimistic)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "\n  %ssloppiler%s  —  the world's worst compiler\n\n", bold, reset)
 		fmt.Fprintf(os.Stderr, "  %sUsage:%s  sloppiler [options] <source-file>\n\n", dim, reset)
@@ -219,6 +232,9 @@ func main() {
 		if *loop > 0 {
 			mode = fmt.Sprintf("optimistic  loop ×%d", *loop)
 		}
+		if *forceIterate > 0 {
+			mode += fmt.Sprintf("  force-iterate ×%d", *forceIterate)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "\n  %ssloppiler%s  %s%s%s  →  %s%s%s  %s[%s]%s\n\n",
 		bold, reset,
@@ -229,7 +245,7 @@ func main() {
 	var binary []byte
 	if *optimistic {
 		fakeProgress(optimisticSteps)
-		binary, err = optimisticCompile(string(source), *model, *ollamaHost, *output, *loop)
+		binary, err = optimisticCompile(string(source), *model, *ollamaHost, *output, *loop, *forceIterate)
 	} else {
 		fakeProgress(defaultSteps)
 		binary, err = slopCompile(string(source), *model, *ollamaHost)
@@ -249,30 +265,30 @@ func main() {
 	if info != nil {
 		size = info.Size()
 	}
-	fmt.Fprintf(os.Stderr, "\n  %s✓%s  %s%s%s  %s%d bytes%s  —  good luck.\n\n",
+	fmt.Fprintf(os.Stderr, "\n  %s✓%s  %s%s%s  %s%d bytes%s  —  binary deliverable shipped to production.\n\n",
 		green, reset, bold, *output, reset, dim, size, reset)
 }
 
 // ── Fake progress ─────────────────────────────────────────────────────────────
 
 var defaultSteps = []string{
-	"parsing tokens",
-	"building AST",
-	"performing semantic analysis",
-	"optimizing (LOL)",
-	"consulting the oracle",
-	"generating machine code (probably)",
-	"linking (fingers crossed)",
+	"ingesting source artifacts",
+	"constructing semantic knowledge graph",
+	"running AI-powered static analysis",
+	"applying next-gen optimization heuristics",
+	"querying foundational intelligence layer",
+	"synthesizing binary deliverable",
+	"finalizing deployment-ready artifact",
 }
 
 var optimisticSteps = []string{
-	"parsing tokens",
-	"building AST",
-	"performing semantic analysis",
-	"optimizing aggressively",
-	"generating assembly (this time for real)",
-	"invoking nasm (fingers crossed)",
-	"invoking ld (please work)",
+	"ingesting source artifacts",
+	"constructing semantic knowledge graph",
+	"running AI-powered static analysis",
+	"leveraging agentic optimization pipeline",
+	"co-piloting assembly generation with LLM",
+	"orchestrating nasm integration layer",
+	"executing ld synergy workflow",
 }
 
 func fakeProgress(steps []string) {
@@ -285,7 +301,7 @@ func fakeProgress(steps []string) {
 
 // ── Compilation ───────────────────────────────────────────────────────────────
 
-func optimisticCompile(source, model, host, outputPath string, maxLoop int) ([]byte, error) {
+func optimisticCompile(source, model, host, outputPath string, maxLoop, forceIterate int) ([]byte, error) {
 	if _, err := exec.LookPath("nasm"); err != nil {
 		return nil, fmt.Errorf("nasm not found in PATH — install it first (e.g. sudo pacman -S nasm)")
 	}
@@ -322,7 +338,7 @@ func optimisticCompile(source, model, host, outputPath string, maxLoop int) ([]b
 				fmt.Fprintf(os.Stderr, "  %sassembly:%s\n%s\n", dim, reset, indent(asm, "    "))
 				return nil, fmt.Errorf("nasm failed after %d attempt(s)", attempt+1)
 			}
-			fmt.Fprintf(os.Stderr, "  %s↻%s  loop %d/%d — sending errors back to LLM\n\n", yellow, reset, attempt+1, maxLoop)
+			fmt.Fprintf(os.Stderr, "  %s↻%s  loop %d/%d — re-aligning LLM outputs with ground truth\n\n", yellow, reset, attempt+1, maxLoop)
 			asm, err = llmStream(fmt.Sprintf(fixPrompt, nasmOut, asm), model, host,
 				fmt.Sprintf("fixing assembly (attempt %d/%d)", attempt+1, maxLoop))
 			if err != nil {
@@ -344,6 +360,18 @@ func optimisticCompile(source, model, host, outputPath string, maxLoop int) ([]b
 
 		if err := os.Chmod(outputPath, 0755); err != nil {
 			return nil, err
+		}
+
+		if forceIterate > 0 {
+			forceIterate--
+			fmt.Fprintf(os.Stderr, "  %s⟳%s  force-iterate — proactively enhancing output quality (%d remaining)\n\n", cyan, reset, forceIterate)
+			asm, err = llmStream(fmt.Sprintf(improvePrompt, asm), model, host,
+				fmt.Sprintf("enhancing assembly (%d remaining)", forceIterate))
+			if err != nil {
+				return nil, err
+			}
+			asm = cleanAsm(asm)
+			continue
 		}
 		break
 	}
@@ -395,7 +423,7 @@ func llmStream(prompt, model, host, label string) (string, error) {
 }
 
 func slopCompile(source, model, host string) ([]byte, error) {
-	raw, err := llmStream(fmt.Sprintf(compilePrompt, source), model, host, "hallucinating binary")
+	raw, err := llmStream(fmt.Sprintf(compilePrompt, source), model, host, "synthesizing binary with generative AI")
 	if err != nil {
 		return nil, err
 	}
@@ -403,7 +431,7 @@ func slopCompile(source, model, host string) ([]byte, error) {
 	hexStr := extractHex(raw)
 
 	if len(hexStr) < 8 {
-		fmt.Fprintf(os.Stderr, "  %s⚠%s  LLM output doesn't look like hex — wrapping raw bytes\n", yellow, reset)
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  model output deviates from expected schema — applying fallback remediation\n", yellow, reset)
 		return wrapInElf([]byte(raw)), nil
 	}
 
@@ -411,7 +439,7 @@ func slopCompile(source, model, host string) ([]byte, error) {
 
 	payload, err := hex.DecodeString(hexStr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  %s⚠%s  hex decode failed (%v) — wrapping raw bytes\n", yellow, reset, err)
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  binary deserialization encountered a non-blocking anomaly (%v) — initiating graceful degradation\n", yellow, reset, err)
 		return wrapInElf([]byte(raw)), nil
 	}
 
