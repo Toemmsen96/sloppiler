@@ -386,7 +386,16 @@ func llmStream(prompt, model, host, label string) (string, error) {
 		Stream: true,
 	})
 
-	resp, err := http.Post(host, "application/json", bytes.NewReader(reqBody))
+	req, err := http.NewRequest("POST", host, bytes.NewReader(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("cannot build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token := os.Getenv("SLOPPILER_API_KEY"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("cannot reach ollama at %s: %w", host, err)
 	}

@@ -113,6 +113,10 @@ Even when assembly succeeds, forces N additional improvement cycles where the LL
 ## Images
 ![image/](assets/image.png)
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Toemmsen96/sloppiler&type=Date)](https://star-history.com/#Toemmsen96/sloppiler&Date)
+
 ---
 
 ## Disclaimer
