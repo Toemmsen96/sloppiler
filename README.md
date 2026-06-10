@@ -4,18 +4,22 @@
 > "We didn't reinvent the compiler. We asked an AI to guess what one looks like."
 > — Sloppiler Engineering Blog, Issue 1 (Final)
 
-**Sloppiler** is a next-generation, AI-first, LLM-native compilation solution that leverages the full generative power of large language models to transform your source code into a binary-adjacent artifact — in seconds.
+**Sloppiler** is a next-generation, AI-first, LLM-native compilation solution that leverages the full generative power of large language models to holistically transform your source code into a binary-adjacent executable artifact — at startup speed.
 
-Traditional compilers are slow, opinionated, and frankly elitist. They *parse*. They *typecheck*. They *care*. Sloppiler doesn't. Sloppiler **vibes** your code into existence using a local language model, skipping the pedantic intermediate steps that have held software engineering back for decades.
+Traditional compilers are slow, opinionated, and frankly elitist. They *parse*. They *typecheck*. They *care*. Sloppiler doesn't. Sloppiler **vibes** your code into existence using a local language model, disrupting the pedantic intermediate steps that have held the software development lifecycle back for decades. By moving compilation to the inference layer, Sloppiler unlocks a new paradigm of developer velocity — one where the bottleneck is no longer your toolchain, but your willingness to run the output.
 
 **Key differentiators:**
-- Zero determinism — every build is unique
-- Blazing-fast failure
-- Segfault-as-a-feature architecture
-- 100% hallucination-driven code generation
-- Runs entirely on-premise (the LLM has no idea what it's doing, but at least it's your LLM)
+- Zero determinism — every build is a unique stakeholder experience
+- Blazing-fast time-to-segfault
+- Segfault-as-a-feature architecture with full core dump transparency
+- 100% hallucination-driven code generation with no legacy constraints
+- Agentic assembly pipeline (--optimistic flag) for synergistic human-AI co-compilation
+- Runs entirely on-premise — your data, your hallucinations, your crash
+- Shift-left binary production: skip the compiler, go straight to being wrong in production
 
-*Sloppiler is backed by nobody and recommended by no one.*
+**Sloppiler is the only compiler built around the insight that your code doesn't need to be *understood* — it needs to be *shipped*.**
+
+*Sloppiler is backed by nobody, recommended by no one, and has a 25% success rate on Hello World.*
 
 ## Requirements
 
@@ -49,11 +53,11 @@ MODEL=codellama ./run.sh main.c hello
 | `-ollama` | `http://localhost:11434/api/generate` | Ollama API URL |
 | `--optimistic` | false | Ask the LLM for assembly and actually try to assemble it |
 
-## Modes
+## Compilation Modalities
 
-### Default mode
+### Core Mode — *Frictionless Binary Ideation*
 
-Asks the LLM to output the binary directly as a hex string. The LLM will produce something that looks vaguely like binary. A valid ELF header is prepended so the kernel will at least attempt to execute it before inevitably crashing.
+Asks the LLM to output the binary directly as a hex string. The LLM will produce something that looks vaguely like binary. A valid ELF header is prepended so the kernel will at least attempt to execute it before inevitably crashing. This is our flagship zero-abstraction, direct-to-segfault pipeline.
 
 ```sh
 ./sloppiler -model codellama main.c -o hello
@@ -61,9 +65,9 @@ Asks the LLM to output the binary directly as a hex string. The LLM will produce
 # zsh: segmentation fault (core dumped) ./hello
 ```
 
-### Optimistic mode (`--optimistic`)
+### Optimistic Mode (`--optimistic`) — *Agentic Assembly Co-Pilot*
 
-Asks the LLM for NASM assembly instead, then pipes it through `nasm` and `ld` for real. The assembly will look structurally correct and be completely wrong in ways that are only visible at runtime.
+Engages the LLM as a strategic assembly generation partner, then routes output through `nasm` and `ld` for real. The assembly will look structurally correct and be completely wrong in ways that are only visible at runtime. Think of it as pair programming where your pair has never used a computer.
 
 ```sh
 ./sloppiler --optimistic -model codellama main.c -o hello
