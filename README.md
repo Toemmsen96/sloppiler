@@ -110,7 +110,8 @@ Even when assembly succeeds, forces N additional improvement cycles where the LL
 | optimistic | phi3 | `assembly` on line 1 | nasm error |
 | optimistic | codellama | valid binary, `Hello, world!` printed | worked! |
 
-
+## Images
+![image/](assets/image.png)
 
 ---
 
