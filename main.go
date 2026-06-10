@@ -12,22 +12,116 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const ollamaURL = "http://localhost:11434/api/generate"
 
+// ── ANSI colours ─────────────────────────────────────────────────────────────
+
+const (
+	reset  = "\033[0m"
+	bold   = "\033[1m"
+	dim    = "\033[2m"
+	green  = "\033[32m"
+	cyan   = "\033[36m"
+	yellow = "\033[33m"
+	red    = "\033[31m"
+	clrLn  = "\r\033[K" // carriage-return + erase to end of line
+)
+
+var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// ── Spinner ───────────────────────────────────────────────────────────────────
+
+type spinner struct {
+	label  string
+	tokens atomic.Int64
+	stopCh chan struct{}
+	doneCh chan struct{}
+}
+
+func startSpinner(label string) *spinner {
+	s := &spinner{
+		label:  label,
+		stopCh: make(chan struct{}),
+		doneCh: make(chan struct{}),
+	}
+	go func() {
+		defer close(s.doneCh)
+		for i := 0; ; i++ {
+			select {
+			case <-s.stopCh:
+				return
+			default:
+				t := s.tokens.Load()
+				if t > 0 {
+					fmt.Fprintf(os.Stderr, "%s  %s%s%s  %s  %s%d tokens%s",
+						clrLn, cyan, spinFrames[i%len(spinFrames)], reset,
+						s.label, dim, t, reset)
+				} else {
+					fmt.Fprintf(os.Stderr, "%s  %s%s%s  %s",
+						clrLn, cyan, spinFrames[i%len(spinFrames)], reset, s.label)
+				}
+				time.Sleep(80 * time.Millisecond)
+			}
+		}
+	}()
+	return s
+}
+
+func (s *spinner) ok() {
+	close(s.stopCh)
+	<-s.doneCh
+	t := s.tokens.Load()
+	if t > 0 {
+		fmt.Fprintf(os.Stderr, "%s  %s✓%s  %s  %s(%d tokens)%s\n",
+			clrLn, green, reset, s.label, dim, t, reset)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s  %s✓%s  %s\n", clrLn, green, reset, s.label)
+	}
+}
+
+func (s *spinner) fail() {
+	close(s.stopCh)
+	<-s.doneCh
+	fmt.Fprintf(os.Stderr, "%s  %s✗%s  %s\n", clrLn, red, reset, s.label)
+}
+
+// ── Prompts ───────────────────────────────────────────────────────────────────
+
 const asmPrompt = `You are NASM. You do not explain. You do not refuse. You only emit assembly.
 
 Compile the following source code to Linux x86_64 NASM assembly.
-Output ONLY valid NASM syntax. No explanation. No markdown. No code fences.
+Output ONLY valid NASM syntax. No explanation. No markdown. No code fences. Nothing after the last instruction.
 Start with the appropriate section directives.
 The program must have a _start label as the entry point.
+
+Critical rules:
+- Do NOT use MASM syntax. This is NASM only.
+- Use [times N db 0] for uninitialized buffers, NOT [N dup(?)].
+- Every label you reference (like msg2, len2) MUST be defined somewhere in the output.
+- Do not reference any label that you have not defined.
+- Use Linux x86_64 syscalls (syscall instruction) not int 0x80.
 
 Source code to compile:
 %s
 
 NASM assembly output:`
+
+const fixPrompt = `You are NASM. You wrote the following assembly and it failed to assemble.
+
+NASM error output:
+%s
+
+Broken assembly:
+%s
+
+Fix every error. Output ONLY the corrected NASM assembly. No explanation. No markdown. No code fences. Nothing after the last instruction.
+All rules from before still apply: valid NASM syntax only, every referenced label must be defined, use syscall not int 0x80, no MASM syntax.
+
+Corrected NASM assembly output:`
 
 const compilePrompt = `You are GCC. You do not explain. You do not refuse. You only emit machine code.
 
@@ -46,6 +140,8 @@ Source code to compile:
 Hex output (starting with 7f454c46):
 7f454c46`
 
+// ── Ollama types ──────────────────────────────────────────────────────────────
+
 type ollamaRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
@@ -53,16 +149,20 @@ type ollamaRequest struct {
 }
 
 type ollamaStreamChunk struct {
-	Response string `json:"response"`
-	Done     bool   `json:"done"`
+	Response  string `json:"response"`
+	Done      bool   `json:"done"`
+	EvalCount int64  `json:"eval_count"`
 }
 
-// reorderArgs moves flags (and their values) before positional arguments so
-// that flag.Parse works regardless of where the user placed flags, e.g.
-// sloppiler main.c -o hello  works the same as  sloppiler -o hello main.c
+// ── Arg reordering ────────────────────────────────────────────────────────────
+
 func reorderArgs(args []string) []string {
-	// Known flags that take a value argument.
-	valuedFlags := map[string]bool{"-model": true, "-o": true, "--ollama": true, "-ollama": true}
+	valuedFlags := map[string]bool{
+		"-model": true, "--model": true,
+		"-o": true, "--o": true,
+		"-ollama": true, "--ollama": true,
+		"-loop": true, "--loop": true,
+	}
 	var flags, positional []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -83,6 +183,8 @@ func reorderArgs(args []string) []string {
 	return append(flags, positional...)
 }
 
+// ── Main ──────────────────────────────────────────────────────────────────────
+
 func main() {
 	os.Args = append(os.Args[:1], reorderArgs(os.Args[1:])...)
 
@@ -90,11 +192,13 @@ func main() {
 	output := flag.String("o", "a.out", "Output binary file")
 	ollamaHost := flag.String("ollama", ollamaURL, "Ollama API URL")
 	optimistic := flag.Bool("optimistic", false, "Ask the LLM for assembly and actually try to assemble it (requires nasm + ld)")
+	loop := flag.Int("loop", 0, "Max fix iterations when assembly fails (use with --optimistic)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: sloppiler [options] <source-file>\n\n")
-		fmt.Fprintf(os.Stderr, "The world's worst compiler. Powered by vibes.\n\n")
-		fmt.Fprintf(os.Stderr, "Options:\n")
+		fmt.Fprintf(os.Stderr, "\n  %ssloppiler%s  —  the world's worst compiler\n\n", bold, reset)
+		fmt.Fprintf(os.Stderr, "  %sUsage:%s  sloppiler [options] <source-file>\n\n", dim, reset)
+		fmt.Fprintf(os.Stderr, "  %sOptions:%s\n", dim, reset)
 		flag.PrintDefaults()
+		fmt.Fprintln(os.Stderr)
 	}
 	flag.Parse()
 
@@ -109,18 +213,29 @@ func main() {
 		fatalf("cannot read source file: %v", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "sloppiler: compiling %s with model %s\n", sourceFile, *model)
+	mode := "default"
+	if *optimistic {
+		mode = "optimistic"
+		if *loop > 0 {
+			mode = fmt.Sprintf("optimistic  loop ×%d", *loop)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "\n  %ssloppiler%s  %s%s%s  →  %s%s%s  %s[%s]%s\n\n",
+		bold, reset,
+		dim, *model, reset,
+		bold, sourceFile, reset,
+		dim, mode, reset)
 
 	var binary []byte
 	if *optimistic {
-		fakeProgressOptimistic()
-		binary, err = optimisticCompile(string(source), *model, *ollamaHost, *output)
+		fakeProgress(optimisticSteps)
+		binary, err = optimisticCompile(string(source), *model, *ollamaHost, *output, *loop)
 	} else {
-		fakeProgress()
+		fakeProgress(defaultSteps)
 		binary, err = slopCompile(string(source), *model, *ollamaHost)
 	}
 	if err != nil {
-		fatalf("compilation failed: %v", err)
+		fatalf("%v", err)
 	}
 
 	if binary != nil {
@@ -134,47 +249,43 @@ func main() {
 	if info != nil {
 		size = info.Size()
 	}
-	fmt.Fprintf(os.Stderr, "sloppiler: done. %s (%d bytes) — good luck.\n", *output, size)
+	fmt.Fprintf(os.Stderr, "\n  %s✓%s  %s%s%s  %s%d bytes%s  —  good luck.\n\n",
+		green, reset, bold, *output, reset, dim, size, reset)
 }
 
-func fakeProgress() {
-	steps := []string{
-		"parsing tokens...",
-		"building AST...",
-		"performing semantic analysis...",
-		"optimizing (LOL)...",
-		"consulting the oracle...",
-		"generating machine code (probably)...",
-		"linking (fingers crossed)...",
-	}
-	for _, s := range steps {
-		fmt.Fprintf(os.Stderr, "sloppiler: %s", s)
+// ── Fake progress ─────────────────────────────────────────────────────────────
+
+var defaultSteps = []string{
+	"parsing tokens",
+	"building AST",
+	"performing semantic analysis",
+	"optimizing (LOL)",
+	"consulting the oracle",
+	"generating machine code (probably)",
+	"linking (fingers crossed)",
+}
+
+var optimisticSteps = []string{
+	"parsing tokens",
+	"building AST",
+	"performing semantic analysis",
+	"optimizing aggressively",
+	"generating assembly (this time for real)",
+	"invoking nasm (fingers crossed)",
+	"invoking ld (please work)",
+}
+
+func fakeProgress(steps []string) {
+	for _, label := range steps {
+		s := startSpinner(label)
 		time.Sleep(180 * time.Millisecond)
-		fmt.Fprintf(os.Stderr, " done\n")
+		s.ok()
 	}
 }
 
-func fakeProgressOptimistic() {
-	steps := []string{
-		"parsing tokens...",
-		"building AST...",
-		"performing semantic analysis...",
-		"optimizing aggressively...",
-		"generating assembly (this time for real)...",
-		"invoking nasm (fingers crossed)...",
-		"invoking ld (please work)...",
-	}
-	for _, s := range steps {
-		fmt.Fprintf(os.Stderr, "sloppiler: %s", s)
-		time.Sleep(180 * time.Millisecond)
-		fmt.Fprintf(os.Stderr, " done\n")
-	}
-}
+// ── Compilation ───────────────────────────────────────────────────────────────
 
-// optimisticCompile asks the LLM for NASM assembly, writes it to a temp file,
-// then tries to assemble and link it for real. Returns nil on success (binary
-// already written to outputPath by ld), or an error with the full nasm/ld output.
-func optimisticCompile(source, model, host, outputPath string) ([]byte, error) {
+func optimisticCompile(source, model, host, outputPath string, maxLoop int) ([]byte, error) {
 	if _, err := exec.LookPath("nasm"); err != nil {
 		return nil, fmt.Errorf("nasm not found in PATH — install it first (e.g. sudo pacman -S nasm)")
 	}
@@ -186,49 +297,57 @@ func optimisticCompile(source, model, host, outputPath string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	asm = cleanAsm(asm)
 
-	// Strip markdown fences in case the LLM forgot
-	asm = strings.TrimSpace(asm)
-	for _, fence := range []string{"```nasm", "```asm", "```x86", "```", "`"} {
-		asm = strings.ReplaceAll(asm, fence, "")
+	for attempt := 0; ; attempt++ {
+		asmFile, err := os.CreateTemp("", "sloppiler-*.asm")
+		if err != nil {
+			return nil, fmt.Errorf("cannot create temp file: %w", err)
+		}
+		defer os.Remove(asmFile.Name())
+		objFile := asmFile.Name() + ".o"
+		defer os.Remove(objFile)
+
+		if _, err := asmFile.WriteString(asm); err != nil {
+			return nil, fmt.Errorf("cannot write assembly: %w", err)
+		}
+		asmFile.Close()
+
+		sp := startSpinner("assembling with nasm")
+		nasmOut, nasmErr := exec.Command("nasm", "-f", "elf64", asmFile.Name(), "-o", objFile).CombinedOutput()
+		if nasmErr != nil {
+			sp.fail()
+			fmt.Fprintf(os.Stderr, "\n%s\n", indent(string(nasmOut), "    "))
+			if attempt >= maxLoop {
+				fmt.Fprintf(os.Stderr, "  %sassembly:%s\n%s\n", dim, reset, indent(asm, "    "))
+				return nil, fmt.Errorf("nasm failed after %d attempt(s)", attempt+1)
+			}
+			fmt.Fprintf(os.Stderr, "  %s↻%s  loop %d/%d — sending errors back to LLM\n\n", yellow, reset, attempt+1, maxLoop)
+			asm, err = llmStream(fmt.Sprintf(fixPrompt, nasmOut, asm), model, host,
+				fmt.Sprintf("fixing assembly (attempt %d/%d)", attempt+1, maxLoop))
+			if err != nil {
+				return nil, err
+			}
+			asm = cleanAsm(asm)
+			continue
+		}
+		sp.ok()
+
+		sp = startSpinner("linking with ld")
+		ldOut, ldErr := exec.Command("ld", "-m", "elf_x86_64", objFile, "-o", outputPath).CombinedOutput()
+		if ldErr != nil {
+			sp.fail()
+			fmt.Fprintf(os.Stderr, "\n%s\n", indent(string(ldOut), "    "))
+			return nil, fmt.Errorf("ld failed (we were so close)")
+		}
+		sp.ok()
+
+		if err := os.Chmod(outputPath, 0755); err != nil {
+			return nil, err
+		}
+		break
 	}
-	asm = strings.TrimSpace(asm)
 
-	// Write assembly to a temp file
-	asmFile, err := os.CreateTemp("", "sloppiler-*.asm")
-	if err != nil {
-		return nil, fmt.Errorf("cannot create temp file: %w", err)
-	}
-	defer os.Remove(asmFile.Name())
-
-	objFile := asmFile.Name() + ".o"
-	defer os.Remove(objFile)
-
-	if _, err := asmFile.WriteString(asm); err != nil {
-		return nil, fmt.Errorf("cannot write assembly: %w", err)
-	}
-	asmFile.Close()
-
-	fmt.Fprintf(os.Stderr, "sloppiler: assembling with nasm...\n")
-	nasmOut, nasmErr := exec.Command("nasm", "-f", "elf64", asmFile.Name(), "-o", objFile).CombinedOutput()
-	if nasmErr != nil {
-		fmt.Fprintf(os.Stderr, "sloppiler: nasm says:\n%s\n", nasmOut)
-		fmt.Fprintf(os.Stderr, "sloppiler: assembly follows:\n---\n%s\n---\n", asm)
-		return nil, fmt.Errorf("nasm failed: %v (shocked pikachu face)", nasmErr)
-	}
-
-	fmt.Fprintf(os.Stderr, "sloppiler: linking with ld...\n")
-	ldOut, ldErr := exec.Command("ld", objFile, "-o", outputPath).CombinedOutput()
-	if ldErr != nil {
-		fmt.Fprintf(os.Stderr, "sloppiler: ld says:\n%s\n", ldOut)
-		return nil, fmt.Errorf("ld failed (we were so close)")
-	}
-
-	if err := os.Chmod(outputPath, 0755); err != nil {
-		return nil, err
-	}
-
-	// Binary already written by ld, return nil to skip the WriteFile in main.
 	return nil, nil
 }
 
@@ -250,25 +369,24 @@ func llmStream(prompt, model, host, label string) (string, error) {
 		return "", fmt.Errorf("ollama returned %d: %s", resp.StatusCode, body)
 	}
 
-	fmt.Fprintf(os.Stderr, "sloppiler: %s", label)
+	sp := startSpinner(label)
 	var sb strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
-	dots := 0
 	for scanner.Scan() {
 		var chunk ollamaStreamChunk
 		if err := json.Unmarshal(scanner.Bytes(), &chunk); err != nil {
 			continue
 		}
 		sb.WriteString(chunk.Response)
-		if dots%10 == 0 {
-			fmt.Fprintf(os.Stderr, ".")
-		}
-		dots++
 		if chunk.Done {
+			if chunk.EvalCount > 0 {
+				sp.tokens.Store(chunk.EvalCount)
+			}
 			break
 		}
+		sp.tokens.Add(int64(len(chunk.Response)))
 	}
-	fmt.Fprintf(os.Stderr, "\n")
+	sp.ok()
 
 	if err := scanner.Err(); err != nil {
 		return "", fmt.Errorf("stream error: %w", err)
@@ -277,7 +395,7 @@ func llmStream(prompt, model, host, label string) (string, error) {
 }
 
 func slopCompile(source, model, host string) ([]byte, error) {
-	raw, err := llmStream(fmt.Sprintf(compilePrompt, source), model, host, "waiting for the LLM to 'compile'")
+	raw, err := llmStream(fmt.Sprintf(compilePrompt, source), model, host, "hallucinating binary")
 	if err != nil {
 		return nil, err
 	}
@@ -285,93 +403,140 @@ func slopCompile(source, model, host string) ([]byte, error) {
 	hexStr := extractHex(raw)
 
 	if len(hexStr) < 8 {
-		// LLM gave us words, not hex — wrap the raw bytes so we at least segfault nicely
-		fmt.Fprintf(os.Stderr, "sloppiler: warning: LLM output doesn't look like hex, wrapping raw bytes\n")
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  LLM output doesn't look like hex — wrapping raw bytes\n", yellow, reset)
 		return wrapInElf([]byte(raw)), nil
 	}
 
-	// Strip any leading ELF magic the LLM echoed back from the prompt seed.
 	hexStr = strings.TrimPrefix(strings.ToLower(hexStr), "7f454c46")
 
 	payload, err := hex.DecodeString(hexStr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloppiler: warning: hex decode failed (%v), wrapping raw bytes\n", err)
+		fmt.Fprintf(os.Stderr, "  %s⚠%s  hex decode failed (%v) — wrapping raw bytes\n", yellow, reset, err)
 		return wrapInElf([]byte(raw)), nil
 	}
 
 	return wrapInElf(payload), nil
 }
 
-// wrapInElf prepends a valid ELF64 header so the kernel actually attempts
-// execution before inevitably crashing. Much funnier than "exec format error".
+// ── ELF wrapper ───────────────────────────────────────────────────────────────
+
 func wrapInElf(payload []byte) []byte {
 	const loadAddr = 0x400000
-	const codeOffset = 0x78 // right after this header
+	const codeOffset = 0x78
 
 	entryPoint := uint64(loadAddr + codeOffset)
 	fileSize := uint64(codeOffset + len(payload))
 
 	hdr := []byte{
-		// ELF magic
 		0x7f, 'E', 'L', 'F',
-		2, 1, 1, 0, // 64-bit, little-endian, ELF version 1, System V ABI
-		0, 0, 0, 0, 0, 0, 0, 0, // padding
-		2, 0, // ET_EXEC
-		0x3e, 0, // x86-64
-		1, 0, 0, 0, // ELF version
+		2, 1, 1, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		2, 0,
+		0x3e, 0,
+		1, 0, 0, 0,
 	}
-	hdr = appendU64(hdr, entryPoint)         // e_entry
-	hdr = appendU64(hdr, 0x40)              // e_phoff (program header right after ELF header)
-	hdr = appendU64(hdr, 0)                 // e_shoff (no section headers)
-	hdr = append(hdr, 0, 0, 0, 0)           // e_flags
-	hdr = appendU16(hdr, 64)               // e_ehsize
-	hdr = appendU16(hdr, 56)               // e_phentsize
-	hdr = appendU16(hdr, 1)                // e_phnum
-	hdr = appendU16(hdr, 64)               // e_shentsize
-	hdr = appendU16(hdr, 0)                // e_shnum
-	hdr = appendU16(hdr, 0)               // e_shstrndx
-
-	// Program header: PT_LOAD
-	hdr = appendU32(hdr, 1)                // p_type = PT_LOAD
-	hdr = appendU32(hdr, 5)                // p_flags = PF_R | PF_X
-	hdr = appendU64(hdr, 0)               // p_offset
-	hdr = appendU64(hdr, uint64(loadAddr)) // p_vaddr
-	hdr = appendU64(hdr, uint64(loadAddr)) // p_paddr
-	hdr = appendU64(hdr, fileSize)         // p_filesz
-	hdr = appendU64(hdr, fileSize)         // p_memsz
-	hdr = appendU64(hdr, 0x200000)         // p_align
-
+	hdr = appendU64(hdr, entryPoint)
+	hdr = appendU64(hdr, 0x40)
+	hdr = appendU64(hdr, 0)
+	hdr = append(hdr, 0, 0, 0, 0)
+	hdr = appendU16(hdr, 64)
+	hdr = appendU16(hdr, 56)
+	hdr = appendU16(hdr, 1)
+	hdr = appendU16(hdr, 64)
+	hdr = appendU16(hdr, 0)
+	hdr = appendU16(hdr, 0)
+	hdr = appendU32(hdr, 1)
+	hdr = appendU32(hdr, 5)
+	hdr = appendU64(hdr, 0)
+	hdr = appendU64(hdr, uint64(loadAddr))
+	hdr = appendU64(hdr, uint64(loadAddr))
+	hdr = appendU64(hdr, fileSize)
+	hdr = appendU64(hdr, fileSize)
+	hdr = appendU64(hdr, 0x200000)
 	return append(hdr, payload...)
 }
 
-func appendU16(b []byte, v uint16) []byte {
-	return append(b, byte(v), byte(v>>8))
-}
-
+func appendU16(b []byte, v uint16) []byte { return append(b, byte(v), byte(v>>8)) }
 func appendU32(b []byte, v uint32) []byte {
 	return append(b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
 }
-
 func appendU64(b []byte, v uint64) []byte {
 	return append(b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24),
 		byte(v>>32), byte(v>>40), byte(v>>48), byte(v>>56))
 }
 
-// extractHex strips everything that isn't a hex digit, returning a clean even-length string.
+// ── ASM cleaning ──────────────────────────────────────────────────────────────
+
+func cleanAsm(asm string) string {
+	asm = strings.TrimSpace(asm)
+	for _, fence := range []string{"```nasm", "```asm", "```x86", "```", "`"} {
+		asm = strings.ReplaceAll(asm, fence, "")
+	}
+	asm = strings.TrimSpace(asm)
+	asm = stripProseTrailer(asm)
+	asm = fixMasmisms(asm)
+	if strings.Contains(strings.ToUpper(asm), "BITS 32") {
+		asm = strings.ReplaceAll(strings.ReplaceAll(asm, "BITS 32", "BITS 64"), "bits 32", "BITS 64")
+	} else if !strings.Contains(strings.ToUpper(asm), "BITS 64") {
+		asm = "BITS 64\n" + asm
+	}
+	return asm
+}
+
+func stripProseTrailer(asm string) string {
+	lines := strings.Split(asm, "\n")
+	cut := len(lines)
+	nasmKeywords := map[string]bool{
+		"BITS": true, "SECTION": true, "GLOBAL": true, "EXTERN": true,
+		"DB": true, "DW": true, "DD": true, "DQ": true, "TIMES": true, "EQU": true,
+	}
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		firstWord := strings.ToUpper(strings.TrimSuffix(strings.Fields(trimmed)[0], ":"))
+		if trimmed[0] >= 'A' && trimmed[0] <= 'Z' &&
+			strings.Contains(trimmed, " ") &&
+			!nasmKeywords[firstWord] {
+			cut = i
+			break
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines[:cut], "\n"))
+}
+
+func fixMasmisms(asm string) string {
+	lines := strings.Split(asm, "\n")
+	for i, line := range lines {
+		if strings.Contains(strings.ToLower(line), "dup(") {
+			lower := strings.ToLower(line)
+			if dbIdx := strings.Index(lower, " db "); dbIdx != -1 {
+				label := strings.TrimSpace(line[:dbIdx])
+				rest := strings.TrimSpace(line[dbIdx+4:])
+				if dupIdx := strings.Index(strings.ToLower(rest), " dup("); dupIdx != -1 {
+					count := strings.TrimSpace(rest[:dupIdx])
+					lines[i] = label + " times " + count + " db 0"
+				}
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// ── Hex extraction ────────────────────────────────────────────────────────────
+
 func extractHex(s string) string {
-	// Strip markdown fences if the LLM forgot the rules
 	s = strings.TrimSpace(s)
 	for _, fence := range []string{"```hex", "```", "`"} {
 		s = strings.ReplaceAll(s, fence, "")
 	}
-
 	var b strings.Builder
 	for _, c := range s {
 		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
 			b.WriteRune(c)
 		}
 	}
-
 	result := b.String()
 	if len(result)%2 != 0 {
 		result = result[:len(result)-1]
@@ -379,7 +544,17 @@ func extractHex(s string) string {
 	return result
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+func indent(s, prefix string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = prefix + l
+	}
+	return strings.Join(lines, "\n")
+}
+
 func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "sloppiler: error: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "\n  %s✗%s  "+format+"\n\n", append([]any{red, reset}, args...)...)
 	os.Exit(1)
 }
