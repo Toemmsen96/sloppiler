@@ -32,9 +32,43 @@ func asmPromptFor(target, source string) string {
 	switch target {
 	case "windows":
 		header = "Windows x86_64 PE executable (NASM win64 format)"
-		rules = `- Use Windows x64 ABI syscalls via the Windows API — or use WriteFile/ExitProcess via kernel32.
+		rules = `- NEVER use Linux syscalls (syscall with rax=1/60). This is Windows — they do not exist.
+- Declare every Windows API function with 'extern' before use.
+- Use Windows x64 calling convention: args in rcx, rdx, r8, r9; extra args on stack above shadow space.
+- ALWAYS allocate 40 bytes before any call: sub rsp, 40  (32 shadow space + 8 to keep 16-byte alignment).
+- Call GetStdHandle(-11) to get stdout. Call WriteConsoleA or WriteFile for output. Call ExitProcess(0) to exit.
+- Use 'default rel' at the top so [rel label] addressing works.
 - Entry point label: _start (linked with --entry _start).
-- Use NASM win64 format conventions (no Linux syscalls).`
+
+Mandatory skeleton — follow this pattern exactly:
+
+  bits 64
+  default rel
+
+  extern GetStdHandle
+  extern WriteConsoleA
+  extern ExitProcess
+
+  section .data
+    msg db "hello", 13, 10
+    msglen equ $ - msg
+    written dd 0
+
+  section .text
+  global _start
+  _start:
+    sub rsp, 40
+    mov rcx, -11
+    call GetStdHandle
+    mov rbx, rax
+    mov rcx, rbx
+    lea rdx, [msg]
+    mov r8d, msglen
+    lea r9, [written]
+    mov qword [rsp+32], 0
+    call WriteConsoleA
+    xor rcx, rcx
+    call ExitProcess`
 	case "darwin":
 		header = "macOS x86_64 Mach-O executable (NASM macho64 format)"
 		rules = `- Use macOS BSD syscalls: syscall number in rax, args in rdi rsi rdx r10 r8 r9.
@@ -338,6 +372,88 @@ func nasmFormat(target string) string {
 	}
 }
 
+// windowsImportLibDir ensures kernel32/msvcrt import libraries exist and returns the dir.
+func windowsImportLibDir() (string, error) {
+	libDir := "/tmp/sloppiler-win-libs"
+	if err := os.MkdirAll(libDir, 0755); err != nil {
+		return "", err
+	}
+
+	dlltool := "x86_64-w64-mingw32-dlltool"
+	if _, err := exec.LookPath(dlltool); err != nil {
+		return "", fmt.Errorf("%s not found — install mingw-w64-binutils", dlltool)
+	}
+
+	type lib struct {
+		name string
+		def  string
+	}
+	libs := []lib{
+		{"kernel32", `LIBRARY KERNEL32.DLL
+EXPORTS
+	GetStdHandle
+	WriteFile
+	WriteConsoleA
+	WriteConsoleW
+	ReadFile
+	ReadConsoleA
+	ExitProcess
+	GetCommandLineA
+	GetCommandLineW
+	GetLastError
+	VirtualAlloc
+	VirtualFree
+	HeapAlloc
+	HeapFree
+	GetProcessHeap
+	CloseHandle
+	CreateFileA
+	CreateFileW
+	SetFilePointer
+	GetFileSize
+	Sleep
+	GetTickCount
+	SetConsoleTitleA
+	FlushConsoleInputBuffer
+	OutputDebugStringA
+	FormatMessageA`},
+		{"msvcrt", `LIBRARY MSVCRT.DLL
+EXPORTS
+	printf
+	puts
+	putchar
+	exit
+	_exit
+	malloc
+	free
+	memset
+	memcpy
+	strlen
+	strcpy
+	strcmp
+	sprintf
+	scanf`},
+	}
+
+	for _, l := range libs {
+		libPath := libDir + "/lib" + l.name + ".a"
+		if _, err := os.Stat(libPath); err == nil {
+			continue // already built
+		}
+		defFile := libDir + "/" + l.name + ".def"
+		if err := os.WriteFile(defFile, []byte(l.def), 0644); err != nil {
+			return "", err
+		}
+		out, err := exec.Command(dlltool,
+			"--as-flags=--64", "-m", "i386:x86-64",
+			"-d", defFile, "-l", libPath).CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("dlltool failed for %s: %v\n%s", l.name, err, out)
+		}
+	}
+	return libDir, nil
+}
+
 // linkerArgs returns the linker binary and arguments for the given target and object file.
 func linkerArgs(target, objFile, outputPath string) (string, []string, error) {
 	switch target {
@@ -346,7 +462,18 @@ func linkerArgs(target, objFile, outputPath string) (string, []string, error) {
 		if _, err := exec.LookPath(linker); err != nil {
 			return "", nil, fmt.Errorf("%s not found — install mingw-w64 (e.g. sudo pacman -S mingw-w64-binutils)", linker)
 		}
-		return linker, []string{"--entry", "_start", "--subsystem", "console", objFile, "-o", outputPath}, nil
+		libDir, err := windowsImportLibDir()
+		if err != nil {
+			return "", nil, fmt.Errorf("cannot build Windows import libs: %w", err)
+		}
+		args := []string{
+			"--entry", "_start", "--subsystem", "console",
+			"--disable-runtime-pseudo-reloc",
+			objFile,
+			"-L", libDir, "-lkernel32", "-lmsvcrt",
+			"-o", outputPath,
+		}
+		return linker, args, nil
 	case "darwin":
 		for _, linker := range []string{"ld64.lld", "ld.lld"} {
 			if _, err := exec.LookPath(linker); err == nil {
