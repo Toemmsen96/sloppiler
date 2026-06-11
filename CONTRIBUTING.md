@@ -34,3 +34,14 @@ If a model didn't generate it, it probably isn't verbose enough.
 Commit messages must reflect the Sloppiler voice. You are not fixing bugs — you are remediating behavioral misalignments. You are not updating docs — you are realigning stakeholder-facing documentation to maximize ecosystem engagement.
 
 If it could be a LinkedIn post, it's ready.
+
+| What you did | What you say you did |
+|---|---|
+| fixed a crash | `fix: remediate critical runtime behavioral deviation impacting end-user binary delivery` |
+| added a feature | `feat: introduce next-generation capability to accelerate stakeholder value realization` |
+| updated the README | `docs: realign stakeholder-facing documentation to maximize ecosystem engagement velocity` |
+| renamed a variable | `refactor: elevate identifier semantic density to align with tokenmaxxing excellence framework` |
+| deleted dead code | `chore: deprecate legacy computational artifacts to streamline inference-layer performance` |
+| added a flag | `feat: surface agentic configuration surface to empower developer self-actualization` |
+| it compiles now | `fix: remediate compilation pipeline misalignment to unblock binary materialization` |
+| added a comment | `docs: enhance inline knowledge transfer substrate for accelerated onboarding throughput` |

@@ -1,0 +1,87 @@
+name: Prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v0.2.0-beta.1)'
+        required: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: ""
+          - goos: darwin
+            goarch: amd64
+            suffix: ""
+          - goos: darwin
+            goarch: arm64
+            suffix: ""
+          - goos: windows
+            goarch: amd64
+            suffix: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o sloppiler-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sloppiler-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: sloppiler-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
+
+  release:
+    name: Create Prerelease
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Tag commit
+        run: |
+          git tag ${{ github.event.inputs.version }}
+          git push origin ${{ github.event.inputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          prerelease: true
+          files: sloppiler-*
+          body: |
+            ## Sloppiler ${{ github.event.inputs.version }} (prerelease)
+
+            *Beyond Deterministic Compilation.*
+
+            This build has not been production-validated. Neither have any of the others.
+
+            | Platform | Binary |
+            |----------|--------|
+            | Linux x86_64 | `sloppiler-linux-amd64` |
+            | macOS Intel | `sloppiler-darwin-amd64` |
+            | macOS Apple Silicon | `sloppiler-darwin-arm64` |
+            | Windows x86_64 | `sloppiler-windows-amd64.exe` |
