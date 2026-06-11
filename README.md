@@ -20,6 +20,10 @@ Traditional compilers are slow, opinionated, and constrained by decades of deter
 
 **Sloppiler is the only compiler built on the insight that your code doesn't need to be *understood* — it needs to be *shipped*.**
 
+## Roadmap
+
+See the [Alphabet of Inevitability](ROADMAP.md).
+
 ## Contributing
 
 See the [Contributor Excellence Framework](CONTRIBUTING.md).
