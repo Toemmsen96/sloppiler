@@ -1,25 +1,28 @@
 # Sloppiler
-### *Compile Smarter. Not Correctly.*
+### *Beyond Deterministic Compilation*
 
 > "We didn't reinvent the compiler. We asked an AI to guess what one looks like."
 > — Sloppiler Engineering Blog, Issue 1 (Final)
 
-**Sloppiler** is a next-generation, AI-first, LLM-native compilation solution that leverages the full generative power of large language models to holistically transform your source code into a binary-adjacent executable artifact — at startup speed.
+**Sloppiler** is a next-generation, AI-first, LLM-native compilation platform that leverages the full generative power of large language models to holistically transform your source code into an executable binary artifact — at inference speed.
 
-Traditional compilers are slow, opinionated, and frankly elitist. They *parse*. They *typecheck*. They *care*. Sloppiler doesn't. Sloppiler **vibes** your code into existence using a local language model, disrupting the pedantic intermediate steps that have held the software development lifecycle back for decades. By moving compilation to the inference layer, Sloppiler unlocks a new paradigm of developer velocity — one where the bottleneck is no longer your toolchain, but your willingness to run the output.
+Traditional compilers are slow, opinionated, and constrained by decades of deterministic thinking. They parse. They typecheck. They enforce a single correct answer. Sloppiler moves compilation to the inference layer, reasoning about your *intent* rather than your *syntax* — eliminating the pedantic intermediate steps that have constrained the software development lifecycle for decades. The bottleneck is no longer your toolchain. It's your willingness to ship.
 
 **Key differentiators:**
 - Zero determinism — every build is a unique stakeholder experience
+- Polyglot-native input layer — not bound by the grammar constraints of any single language specification
 - Blazing-fast time-to-segfault
 - Segfault-as-a-feature architecture with full core dump transparency
-- 100% hallucination-driven code generation with no legacy constraints
-- Agentic assembly pipeline (--optimistic flag) for synergistic human-AI co-compilation
-- Runs entirely on-premise — your data, your hallucinations, your crash
-- Shift-left binary production: skip the compiler, go straight to being wrong in production
+- Model-native code synthesis unconstrained by legacy compiler assumptions
+- Agentic assembly pipeline (`--optimistic`) for synergistic human-AI co-compilation
+- Fully on-premise inference — your data, your model, your binary
+- Radical shift-left binary delivery: bypass intermediate toolchain layers and ship directly
 
-**Sloppiler is the only compiler built around the insight that your code doesn't need to be *understood* — it needs to be *shipped*.**
+**Sloppiler is the only compiler built on the insight that your code doesn't need to be *understood* — it needs to be *shipped*.**
 
-*Sloppiler is backed by nobody, recommended by no one, and has a 25% success rate on Hello World.*
+## Contributing
+
+See the [Contributor Excellence Framework](CONTRIBUTING.md).
 
 ## Requirements
 
@@ -59,7 +62,7 @@ MODEL=codellama ./run.sh main.c hello
 
 ### Core Mode — *Frictionless Binary Ideation*
 
-Asks the LLM to output the binary directly as a hex string. The LLM will produce something that looks vaguely like binary. A valid ELF header is prepended so the kernel will at least attempt to execute it before inevitably crashing. This is our flagship zero-abstraction, direct-to-segfault pipeline.
+Instructs the model to emit the target binary as a hex-encoded byte sequence, which Sloppiler materializes directly to disk. An ELF header is synthesized to ensure kernel compatibility and binary executability. This is our flagship zero-abstraction, direct-to-segfault pipeline.
 
 ```sh
 ./sloppiler -model codellama main.c -o hello
@@ -69,7 +72,7 @@ Asks the LLM to output the binary directly as a hex string. The LLM will produce
 
 ### Optimistic Mode (`--optimistic`) — *Agentic Assembly Co-Pilot*
 
-Engages the LLM as a strategic assembly generation partner, then routes output through `nasm` and `ld` for real. The assembly will look structurally correct and be completely wrong in ways that are only visible at runtime. Think of it as pair programming where your pair has never used a computer.
+Engages the model as an assembly generation partner, routing output through `nasm` and `ld` for binary materialization. Assembly is generated holistically from source semantics, bypassing intermediate representation layers.
 
 ```sh
 ./sloppiler --optimistic -model codellama main.c -o hello
@@ -79,7 +82,7 @@ Engages the LLM as a strategic assembly generation partner, then routes output t
 
 ### Loop Mode (`--loop N`) — *Closed-Loop Error Remediation*
 
-When nasm fails, the errors and broken assembly are fed back to the LLM for up to N fix attempts. The LLM will read its own mistakes, nod seriously, and produce new mistakes.
+When assembly fails, the compiler errors and current output are fed back to the model for up to N self-correction cycles — a closed-loop remediation pipeline that continuously aligns output quality with ground truth.
 
 ```sh
 ./sloppiler --optimistic --loop 5 -model codellama main.c -o hello
@@ -87,7 +90,7 @@ When nasm fails, the errors and broken assembly are fed back to the LLM for up t
 
 ### Force Iterate Mode (`--force-iterate N`) — *Continuous Improvement Pipeline*
 
-Even when assembly succeeds, forces N additional improvement cycles where the LLM is asked to enhance what it already wrote. Each cycle compiles and re-feeds the result. There is a non-trivial probability that the LLM will improve a working binary into a broken one.
+Engages N improvement cycles even on successful compilation, feeding each output back to the model for further enhancement. A working binary is a starting point, not an endpoint.
 
 ```sh
 ./sloppiler --optimistic --force-iterate 3 -model codellama main.c -o hello
@@ -97,9 +100,9 @@ Even when assembly succeeds, forces N additional improvement cycles where the LL
 
 | Model | Behaviour |
 |-------|-----------|
-| `codellama` | Commits to the bit. Produces binary that looks almost intentional. Best for `--optimistic`. |
-| `phi3` | Writes poetry disguised as assembly. Hallucinates MASM syntax in NASM files. Fastest. |
-| `llama3` | Explains why it can't compile your code instead of just doing it wrong. |
+| `codellama` | Strong binary output fidelity. Highest semantic alignment in `--optimistic` mode. Recommended. |
+| `phi3` | Fastest inference. Highest creative latitude in output generation. Best for rapid iteration. |
+| `llama3` | Verbose output with extensive reasoning traces. Prioritizes explanation over binary materialization. |
 
 ## Track record
 
@@ -115,9 +118,14 @@ Even when assembly succeeds, forces N additional improvement cycles where the LL
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Toemmsen96/sloppiler&type=Date)](https://star-history.com/#Toemmsen96/sloppiler&Date)
+<a href="https://www.star-history.com/?repos=Toemmsen96%2Fsloppiler&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Toemmsen96/sloppiler&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Toemmsen96/sloppiler&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Toemmsen96/sloppiler&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ---
 
-## Disclaimer
-This clearly is a joke and doesn't really work well. I am not responsible for you bricking your pc.
+<sub>This clearly is a joke and doesn't really work well. I am not responsible for you bricking your pc. </sub>
