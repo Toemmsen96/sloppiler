@@ -1,22 +1,16 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
-	"sync/atomic"
 	"time"
-)
 
-const ollamaURL = "http://localhost:11434/api/generate"
+	"github.com/Toemmsen96/sloppiler/providers"
+)
 
 // ── ANSI colours ─────────────────────────────────────────────────────────────
 
@@ -28,66 +22,7 @@ const (
 	cyan   = "\033[36m"
 	yellow = "\033[33m"
 	red    = "\033[31m"
-	clrLn  = "\r\033[K" // carriage-return + erase to end of line
 )
-
-var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
-// ── Spinner ───────────────────────────────────────────────────────────────────
-
-type spinner struct {
-	label  string
-	tokens atomic.Int64
-	stopCh chan struct{}
-	doneCh chan struct{}
-}
-
-func startSpinner(label string) *spinner {
-	s := &spinner{
-		label:  label,
-		stopCh: make(chan struct{}),
-		doneCh: make(chan struct{}),
-	}
-	go func() {
-		defer close(s.doneCh)
-		for i := 0; ; i++ {
-			select {
-			case <-s.stopCh:
-				return
-			default:
-				t := s.tokens.Load()
-				if t > 0 {
-					fmt.Fprintf(os.Stderr, "%s  %s%s%s  %s  %s%d tokens%s",
-						clrLn, cyan, spinFrames[i%len(spinFrames)], reset,
-						s.label, dim, t, reset)
-				} else {
-					fmt.Fprintf(os.Stderr, "%s  %s%s%s  %s",
-						clrLn, cyan, spinFrames[i%len(spinFrames)], reset, s.label)
-				}
-				time.Sleep(80 * time.Millisecond)
-			}
-		}
-	}()
-	return s
-}
-
-func (s *spinner) ok() {
-	close(s.stopCh)
-	<-s.doneCh
-	t := s.tokens.Load()
-	if t > 0 {
-		fmt.Fprintf(os.Stderr, "%s  %s✓%s  %s  %s(%d tokens)%s\n",
-			clrLn, green, reset, s.label, dim, t, reset)
-	} else {
-		fmt.Fprintf(os.Stderr, "%s  %s✓%s  %s\n", clrLn, green, reset, s.label)
-	}
-}
-
-func (s *spinner) fail() {
-	close(s.stopCh)
-	<-s.doneCh
-	fmt.Fprintf(os.Stderr, "%s  %s✗%s  %s\n", clrLn, red, reset, s.label)
-}
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
 
@@ -208,20 +143,6 @@ Hex output (starting with 7f454c46):
 	}
 }
 
-// ── Ollama types ──────────────────────────────────────────────────────────────
-
-type ollamaRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
-}
-
-type ollamaStreamChunk struct {
-	Response  string `json:"response"`
-	Done      bool   `json:"done"`
-	EvalCount int64  `json:"eval_count"`
-}
-
 // ── Arg reordering ────────────────────────────────────────────────────────────
 
 func reorderArgs(args []string) []string {
@@ -232,6 +153,9 @@ func reorderArgs(args []string) []string {
 		"-loop": true, "--loop": true,
 		"-force-iterate": true, "--force-iterate": true,
 		"-target": true, "--target": true,
+		"-provider": true, "--provider": true,
+		"-api-key": true, "--api-key": true,
+		"-timeout": true, "--timeout": true,
 	}
 	var flags, positional []string
 	for i := 0; i < len(args); i++ {
@@ -258,13 +182,17 @@ func reorderArgs(args []string) []string {
 func main() {
 	os.Args = append(os.Args[:1], reorderArgs(os.Args[1:])...)
 
-	model := flag.String("model", "llama3", "Ollama model to use for compilation")
+	model := flag.String("model", "", "Model name (default: provider-specific — llama3 / gpt-4o / gemini-2.0-flash / claude-opus-4-5)")
 	output := flag.String("o", "a.out", "Output binary file")
-	ollamaHost := flag.String("ollama", ollamaURL, "Ollama API URL")
+	ollamaHost := flag.String("ollama", providers.DefaultOllamaURL, "Ollama API URL (only used with --provider=local)")
 	optimistic := flag.Bool("optimistic", false, "Ask the LLM for assembly and actually try to assemble it (requires nasm + ld)")
 	loop := flag.Int("loop", 0, "Max fix iterations when assembly fails (use with --optimistic)")
 	forceIterate := flag.Int("force-iterate", 0, "Force N improvement cycles even when assembly succeeds (use with --optimistic)")
 	target := flag.String("target", "linux", "Target OS for output binary: linux, windows, darwin")
+	providerName := flag.String("provider", "local", "LLM provider to use: local, openai, google, claude")
+	apiKey := flag.String("api-key", "", "API key for the chosen provider (required unless --provider=local; or set SLOPPILER_API_KEY)")
+	timeout := flag.Int("timeout", 300, "HTTP request timeout in seconds per LLM call (0 = no timeout)")
+	verbose := flag.Bool("verbose", false, "Enable verbose debug output showing HTTP requests, status codes, and streaming milestones")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "\n  %ssloppiler%s  —  beyond deterministic compilation\n\n", bold, reset)
 		fmt.Fprintf(os.Stderr, "  %sUsage:%s  sloppiler [options] <source-file>\n\n", dim, reset)
@@ -277,6 +205,45 @@ func main() {
 	if flag.NArg() < 1 {
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	// Resolve API key: flag → env var fallback.
+	if *apiKey == "" {
+		*apiKey = os.Getenv("SLOPPILER_API_KEY")
+	}
+	if *providerName != "local" && *apiKey == "" {
+		fatalf("--api-key is required for provider %q (or set SLOPPILER_API_KEY)", *providerName)
+	}
+
+	// Set a sensible default model per provider.
+	if *model == "" {
+		switch *providerName {
+		case "openai":
+			*model = "gpt-4o"
+		case "google":
+			*model = "gemini-2.0-flash"
+		case "claude":
+			*model = "claude-opus-4-5"
+		default:
+			*model = "llama3"
+		}
+	}
+
+	// Build the provider.
+	providerOperationalConfig := providers.Config{
+		RequestExecutionTimeout:    time.Duration(*timeout) * time.Second,
+		VerboseDebugLoggingEnabled: *verbose,
+	}
+	var prov providers.Provider
+	switch *providerName {
+	case "openai":
+		prov = providers.NewOpenAI(*model, *apiKey, providerOperationalConfig)
+	case "google":
+		prov = providers.NewGoogle(*model, *apiKey, providerOperationalConfig)
+	case "claude":
+		prov = providers.NewClaude(*model, *apiKey, providerOperationalConfig)
+	default:
+		prov = providers.NewOllama(*ollamaHost, *model, providerOperationalConfig)
 	}
 
 	sourceFile := flag.Arg(0)
@@ -295,19 +262,18 @@ func main() {
 			mode += fmt.Sprintf("  force-iterate ×%d", *forceIterate)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\n  %ssloppiler%s  %s%s%s  →  %s%s%s  %s[%s · %s]%s\n\n",
+	fmt.Fprintf(os.Stderr, "\n  %ssloppiler%s  %s%s · %s%s  →  %s%s%s  %s[%s · %s]%s\n\n",
 		bold, reset,
-		dim, *model, reset,
+		dim, *model, *providerName, reset,
 		bold, sourceFile, reset,
 		dim, mode, *target, reset)
 
 	var binary []byte
 	if *optimistic {
 		fakeProgress(optimisticSteps)
-		binary, err = optimisticCompile(string(source), *model, *ollamaHost, *output, *target, *loop, *forceIterate)
+		binary, err = optimisticCompile(string(source), prov, *output, *target, *loop, *forceIterate)
 	} else {
-		fakeProgress(defaultSteps)
-		binary, err = slopCompile(string(source), *model, *ollamaHost, *target)
+		binary, err = slopCompile(string(source), prov, *target, defaultSteps)
 	}
 	if err != nil {
 		fatalf("%v", err)
@@ -352,9 +318,9 @@ var optimisticSteps = []string{
 
 func fakeProgress(steps []string) {
 	for _, label := range steps {
-		s := startSpinner(label)
+		progressIndicatorInstance := providers.StartSpinner(label)
 		time.Sleep(180 * time.Millisecond)
-		s.ok()
+		progressIndicatorInstance.OK()
 	}
 }
 
@@ -394,12 +360,12 @@ func linkerArgs(target, objFile, outputPath string) (string, []string, error) {
 	}
 }
 
-func optimisticCompile(source, model, host, outputPath, target string, maxLoop, forceIterate int) ([]byte, error) {
+func optimisticCompile(source string, prov providers.Provider, outputPath, target string, maxLoop, forceIterate int) ([]byte, error) {
 	if _, err := exec.LookPath("nasm"); err != nil {
 		return nil, fmt.Errorf("nasm not found in PATH — install it first (e.g. sudo pacman -S nasm)")
 	}
 
-	asm, err := llmStream(asmPromptFor(target, source), model, host, "generating assembly")
+	asm, err := prov.Stream(asmPromptFor(target, source), []string{"generating assembly"})
 	if err != nil {
 		return nil, err
 	}
@@ -419,38 +385,38 @@ func optimisticCompile(source, model, host, outputPath, target string, maxLoop, 
 		}
 		asmFile.Close()
 
-		sp := startSpinner("assembling with nasm")
+		progressIndicatorInstance := providers.StartSpinner("assembling with nasm")
 		nasmOut, nasmErr := exec.Command("nasm", "-f", nasmFormat(target), asmFile.Name(), "-o", objFile).CombinedOutput()
 		if nasmErr != nil {
-			sp.fail()
+			progressIndicatorInstance.Fail()
 			fmt.Fprintf(os.Stderr, "\n%s\n", indent(string(nasmOut), "    "))
 			if attempt >= maxLoop {
 				fmt.Fprintf(os.Stderr, "  %sassembly:%s\n%s\n", dim, reset, indent(asm, "    "))
 				return nil, fmt.Errorf("nasm failed after %d attempt(s)", attempt+1)
 			}
 			fmt.Fprintf(os.Stderr, "  %s↻%s  loop %d/%d — re-aligning LLM outputs with ground truth\n\n", yellow, reset, attempt+1, maxLoop)
-			asm, err = llmStream(fixPromptFor(target, string(nasmOut), asm), model, host,
-				fmt.Sprintf("fixing assembly (attempt %d/%d)", attempt+1, maxLoop))
+			asm, err = prov.Stream(fixPromptFor(target, string(nasmOut), asm),
+				[]string{fmt.Sprintf("fixing assembly (attempt %d/%d)", attempt+1, maxLoop)})
 			if err != nil {
 				return nil, err
 			}
 			asm = cleanAsm(asm)
 			continue
 		}
-		sp.ok()
+		progressIndicatorInstance.OK()
 
 		linker, args, err := linkerArgs(target, objFile, outputPath)
 		if err != nil {
 			return nil, err
 		}
-		sp = startSpinner(fmt.Sprintf("linking with %s", linker))
+		progressIndicatorInstance = providers.StartSpinner(fmt.Sprintf("linking with %s", linker))
 		ldOut, ldErr := exec.Command(linker, args...).CombinedOutput()
 		if ldErr != nil {
-			sp.fail()
+			progressIndicatorInstance.Fail()
 			fmt.Fprintf(os.Stderr, "\n%s\n", indent(string(ldOut), "    "))
 			return nil, fmt.Errorf("linker failed (we were so close)")
 		}
-		sp.ok()
+		progressIndicatorInstance.OK()
 
 		if err := os.Chmod(outputPath, 0755); err != nil {
 			return nil, err
@@ -459,8 +425,8 @@ func optimisticCompile(source, model, host, outputPath, target string, maxLoop, 
 		if forceIterate > 0 {
 			forceIterate--
 			fmt.Fprintf(os.Stderr, "  %s⟳%s  force-iterate — proactively enhancing output quality (%d remaining)\n\n", cyan, reset, forceIterate)
-			asm, err = llmStream(improvePromptFor(target, asm), model, host,
-				fmt.Sprintf("enhancing assembly (%d remaining)", forceIterate))
+			asm, err = prov.Stream(improvePromptFor(target, asm),
+				[]string{fmt.Sprintf("enhancing assembly (%d remaining)", forceIterate)})
 			if err != nil {
 				return nil, err
 			}
@@ -473,60 +439,8 @@ func optimisticCompile(source, model, host, outputPath, target string, maxLoop, 
 	return nil, nil
 }
 
-func llmStream(prompt, model, host, label string) (string, error) {
-	reqBody, _ := json.Marshal(ollamaRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: true,
-	})
-
-	req, err := http.NewRequest("POST", host, bytes.NewReader(reqBody))
-	if err != nil {
-		return "", fmt.Errorf("cannot build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if token := os.Getenv("SLOPPILER_API_KEY"); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("cannot reach ollama at %s: %w", host, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ollama returned %d: %s", resp.StatusCode, body)
-	}
-
-	sp := startSpinner(label)
-	var sb strings.Builder
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		var chunk ollamaStreamChunk
-		if err := json.Unmarshal(scanner.Bytes(), &chunk); err != nil {
-			continue
-		}
-		sb.WriteString(chunk.Response)
-		if chunk.Done {
-			if chunk.EvalCount > 0 {
-				sp.tokens.Store(chunk.EvalCount)
-			}
-			break
-		}
-		sp.tokens.Add(int64(len(chunk.Response)))
-	}
-	sp.ok()
-
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("stream error: %w", err)
-	}
-	return sb.String(), nil
-}
-
-func slopCompile(source, model, host, target string) ([]byte, error) {
-	raw, err := llmStream(fmt.Sprintf(compilePromptFor(target), source), model, host, "synthesizing binary with generative AI")
+func slopCompile(source string, prov providers.Provider, target string, progressSteps []string) ([]byte, error) {
+	raw, err := prov.Stream(fmt.Sprintf(compilePromptFor(target), source), progressSteps)
 	if err != nil {
 		return nil, err
 	}
