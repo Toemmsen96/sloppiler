@@ -58,14 +58,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-
       - name: Tag commit
         run: |
-          git tag ${{ github.event.inputs.version }}
-          git push origin ${{ github.event.inputs.version }}
+          gh api repos/${{ github.repository }}/git/refs \
+            -f ref="refs/tags/${{ github.event.inputs.version }}" \
+            -f sha="${{ github.sha }}"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/download-artifact@v4
         with:
