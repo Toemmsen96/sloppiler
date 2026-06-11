@@ -7,6 +7,9 @@ on:
         description: 'Version tag (e.g. v0.2.0-beta.1)'
         required: true
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -55,9 +58,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
+      - uses: actions/checkout@v4
 
       - name: Tag commit
         run: |
@@ -65,6 +66,10 @@ jobs:
           git push origin ${{ github.event.inputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
 
       - name: Release
         uses: softprops/action-gh-release@v2
