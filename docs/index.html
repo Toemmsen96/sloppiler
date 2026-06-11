@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sloppiler — Beyond Deterministic Compilation</title>
+  <meta name="description" content="The AI-native compiler platform that moves binary materialization to the inference layer. Ship binaries in seconds.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+:root {
+  --bg: #080808;
+  --surface: #0d0d0d;
+  --surface-2: #141414;
+  --border: rgba(255,255,255,0.06);
+  --border-subtle: rgba(255,255,255,0.03);
+  --text: #ededed;
+  --text-muted: #888;
+  --text-dim: #444;
+  --accent: #00d4ff;
+  --accent-dim: rgba(0,212,255,0.1);
+  --accent-glow: rgba(0,212,255,0.25);
+  --purple: #8b5cf6;
+  --green: #22c55e;
+  --green-dim: rgba(34,197,94,0.1);
+  --green-glow: rgba(34,197,94,0.4);
+  --orange: #f97316;
+  --red: #ef4444;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+.container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+#bg-canvas { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+
+/* ── NAV ── */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  border-bottom: 1px solid transparent;
+  transition: background 0.4s, border-color 0.4s, backdrop-filter 0.4s;
+}
+nav.scrolled {
+  background: rgba(8,8,8,0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-color: var(--border);
+}
+.nav-inner {
+  max-width: 1100px; margin: 0 auto; padding: 18px 24px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.nav-logo {
+  font-family: var(--font-mono); font-size: 14px; font-weight: 500;
+  color: var(--accent); text-decoration: none; letter-spacing: -0.02em;
+}
+.nav-links { display: flex; align-items: center; gap: 32px; }
+.nav-links a {
+  color: var(--text-muted); text-decoration: none; font-size: 14px;
+  font-weight: 400; transition: color 0.2s;
+}
+.nav-links a:hover { color: var(--text); }
+.nav-cta {
+  color: var(--text) !important; font-weight: 500 !important;
+  background: var(--surface-2); border: 1px solid var(--border);
+  padding: 7px 16px; border-radius: 7px;
+  transition: border-color 0.2s, background 0.2s !important;
+}
+.nav-cta:hover {
+  border-color: rgba(0,212,255,0.3) !important;
+  background: var(--accent-dim) !important;
+}
+
+/* ── HERO ── */
+.hero {
+  position: relative; padding: 168px 0 120px;
+  text-align: center; overflow: hidden;
+}
+.hero-glow {
+  position: absolute; top: -80px; left: 50%; transform: translateX(-50%);
+  width: 1000px; height: 700px; pointer-events: none;
+  background: radial-gradient(ellipse at center,
+    rgba(0,212,255,0.13) 0%,
+    rgba(139,92,246,0.07) 35%,
+    transparent 65%);
+  animation: glow-breathe 7s ease-in-out infinite alternate;
+}
+@keyframes glow-breathe {
+  from { opacity: 0.7; transform: translateX(-50%) scale(1); }
+  to   { opacity: 1;   transform: translateX(-50%) scale(1.1); }
+}
+.hero-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border); background: var(--surface);
+  padding: 6px 16px; border-radius: 999px; font-size: 12px;
+  color: var(--text-muted); margin-bottom: 32px; letter-spacing: 0.03em;
+}
+.badge-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent);
+  animation: dot-blink 2s ease-in-out infinite;
+}
+@keyframes dot-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.hero-title {
+  font-size: clamp(42px, 7.5vw, 84px); font-weight: 900;
+  line-height: 1.03; letter-spacing: -0.045em; margin-bottom: 24px;
+  background: linear-gradient(160deg, #ffffff 0%, rgba(255,255,255,0.6) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-subtitle {
+  font-size: 18px; color: var(--text-muted); max-width: 520px;
+  margin: 0 auto 40px; line-height: 1.75;
+}
+.hero-ctas {
+  display: flex; gap: 12px; justify-content: center;
+  flex-wrap: wrap; margin-bottom: 72px;
+}
+
+/* ── BUTTONS ── */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 13px 26px; border-radius: 8px; font-size: 15px;
+  font-weight: 500; text-decoration: none; cursor: pointer; border: none;
+  transition: all 0.2s;
+}
+.btn-primary {
+  background: var(--accent); color: #000; position: relative; overflow: hidden;
+}
+.btn-primary::before {
+  content: ''; position: absolute; top: 0; left: -100%;
+  width: 200%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+  transition: left 0.5s;
+}
+.btn-primary:hover::before { left: 100%; }
+.btn-primary:hover { box-shadow: 0 0 28px var(--accent-glow); transform: translateY(-1px); }
+.btn-secondary {
+  background: transparent; color: var(--text); border: 1px solid var(--border);
+}
+.btn-secondary:hover {
+  border-color: rgba(255,255,255,0.18); background: rgba(255,255,255,0.03);
+  transform: translateY(-1px);
+}
+
+/* ── TERMINAL ── */
+.terminal-wrapper { max-width: 740px; margin: 0 auto; }
+.terminal {
+  background: #0d1117; border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 12px; overflow: hidden;
+  box-shadow: 0 40px 100px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.03);
+  text-align: left;
+}
+.terminal-bar {
+  background: #161b22; padding: 13px 18px;
+  display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.dots { display: flex; gap: 7px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; }
+.terminal-title {
+  flex: 1; text-align: center; font-family: var(--font-mono);
+  font-size: 11px; color: #555; letter-spacing: 0.04em;
+}
+.terminal-body {
+  padding: 22px 26px 32px; font-family: var(--font-mono);
+  font-size: 13px; line-height: 1.75; height: 320px;
+  overflow-y: scroll; scrollbar-width: none;
+}
+.terminal-body::-webkit-scrollbar { display: none; }
+.t-line { display: block; }
+.t-cmd  { color: #cdd9e5; }
+.t-hdr  { color: #6e7681; }
+.t-ok   { color: #3fb950; }
+.t-err  { color: #f97316; }
+.t-prompt { color: var(--accent); }
+.cursor {
+  display: inline-block; width: 8px; height: 14px;
+  background: var(--accent); vertical-align: middle;
+  margin-left: 2px; animation: blink 1s step-end infinite;
+}
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* ── TICKER ── */
+.ticker-wrap {
+  padding: 18px 0; overflow: hidden; position: relative;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.ticker-wrap::before, .ticker-wrap::after {
+  content: ''; position: absolute; top: 0; bottom: 0;
+  width: 100px; z-index: 2; pointer-events: none;
+}
+.ticker-wrap::before { left: 0; background: linear-gradient(90deg, var(--bg), transparent); }
+.ticker-wrap::after  { right: 0; background: linear-gradient(-90deg, var(--bg), transparent); }
+.ticker {
+  display: flex; gap: 40px; white-space: nowrap; width: max-content;
+  animation: scroll-left 35s linear infinite;
+}
+.ticker span { font-size: 11px; font-weight: 600; color: #3a3a3a; text-transform: uppercase; letter-spacing: 0.12em; }
+.ticker .sep  { color: var(--accent); opacity: 0.3; }
+@keyframes scroll-left { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+/* ── COUNTERS ── */
+.counter-section { padding: 80px 0; border-bottom: 1px solid var(--border); }
+.counters {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 1px; background: var(--border);
+  border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+}
+.counter-item { background: var(--bg); padding: 40px 28px; text-align: center; }
+.counter-value {
+  font-size: 42px; font-weight: 800; letter-spacing: -0.05em;
+  line-height: 1; margin-bottom: 10px; font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, #fff 0%, rgba(255,255,255,0.7) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.counter-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.09em; }
+
+/* ── SECTIONS ── */
+.section { padding: 100px 0; }
+.section-alt {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.section-header { text-align: center; margin-bottom: 64px; }
+.section-label {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--accent); margin-bottom: 16px;
+}
+.section-title {
+  font-size: clamp(28px, 4vw, 46px); font-weight: 800;
+  letter-spacing: -0.035em; line-height: 1.1; margin-bottom: 14px;
+}
+.section-sub { font-size: 16px; color: var(--text-muted); }
+
+/* ── FEATURE GRID ── */
+.features-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 1px; background: var(--border);
+  border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+}
+.feature-card {
+  background: var(--bg); padding: 32px;
+  position: relative; overflow: hidden;
+  transition: background 0.25s;
+}
+.feature-card::after {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(500px circle at var(--mx,-9999px) var(--my,-9999px), rgba(0,212,255,0.055), transparent 45%);
+  opacity: 0; transition: opacity 0.3s;
+}
+.feature-card:hover { background: #0f0f0f; }
+.feature-card:hover::after { opacity: 1; }
+.feature-icon {
+  width: 40px; height: 40px; border-radius: 9px;
+  background: var(--accent-dim); border: 1px solid rgba(0,212,255,0.15);
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 20px; color: var(--accent);
+}
+.feature-icon svg { width: 20px; height: 20px; stroke-width: 1.6; }
+.feature-title { font-size: 15px; font-weight: 600; margin-bottom: 9px; letter-spacing: -0.01em; }
+.feature-desc  { font-size: 14px; color: var(--text-muted); line-height: 1.65; }
+.feature-desc code {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  padding: 1px 6px; border-radius: 4px; color: var(--accent);
+}
+
+/* ── MODALITIES ── */
+.modalities-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; }
+.modality-card {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 12px; padding: 28px;
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+.modality-card:hover {
+  border-color: rgba(0,212,255,0.2); transform: translateY(-3px);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.4);
+}
+.modality-tier {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--accent); margin-bottom: 10px;
+}
+.modality-title { font-size: 18px; font-weight: 700; letter-spacing: -0.025em; margin-bottom: 10px; }
+.modality-desc  { font-size: 14px; color: var(--text-muted); line-height: 1.65; margin-bottom: 20px; }
+.code-block {
+  background: #0d1117; border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px; padding: 14px 16px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.8;
+  overflow-x: auto;
+}
+.cp { color: var(--accent); } /* prompt */
+.cc { color: #cdd9e5; }       /* command */
+.cm { color: #444; }          /* comment/muted */
+.ce { color: var(--orange); } /* error */
+
+/* ── TABLES ── */
+.table-wrap {
+  overflow-x: auto; border: 1px solid var(--border);
+  border-radius: 12px;
+}
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead th {
+  background: var(--surface-2); padding: 14px 20px; text-align: left;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+tbody td { padding: 16px 20px; border-bottom: 1px solid var(--border-subtle); color: var(--text-muted); }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: rgba(255,255,255,0.01); }
+code {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  padding: 2px 7px; border-radius: 4px; color: var(--text);
+}
+.res-fail  { color: var(--red);    font-weight: 600; }
+.res-warn  { color: var(--orange); font-weight: 600; }
+.res-win   { color: var(--green);  font-weight: 700; animation: win-glow 2s ease-in-out infinite; }
+@keyframes win-glow {
+  0%,100% { text-shadow: 0 0 8px rgba(34,197,94,0.3); }
+  50%      { text-shadow: 0 0 20px rgba(34,197,94,0.7); }
+}
+.win-row td { background: rgba(34,197,94,0.025) !important; }
+.table-caption { margin-top: 16px; font-size: 12px; color: var(--text-dim); text-align: center; font-style: italic; }
+
+.model-pill {
+  font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+  background: var(--accent-dim); color: var(--accent);
+  border: 1px solid rgba(0,212,255,0.15);
+  padding: 3px 11px; border-radius: 999px;
+}
+.prod-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
+  background: var(--green-dim); color: var(--green);
+  border: 1px solid rgba(34,197,94,0.2);
+  padding: 3px 11px; border-radius: 999px;
+}
+
+/* ── TESTIMONIALS ── */
+.testimonials-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; }
+.testimonial-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 28px;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.testimonial-card:hover { border-color: rgba(255,255,255,0.12); transform: translateY(-2px); }
+.t-quote { font-size: 15px; line-height: 1.75; margin-bottom: 24px; font-style: italic; }
+.t-quote::before { content: '"'; color: var(--accent); }
+.t-quote::after  { content: '"'; color: var(--accent); }
+.t-name  { font-size: 13px; font-weight: 600; }
+.t-role  { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+/* ── TOKENMAXXING ── */
+.naming-wrap { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 48px; }
+.naming-col  { flex: 1; min-width: 220px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.naming-head {
+  padding: 12px 20px; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  border-bottom: 1px solid var(--border);
+}
+.naming-head.bad  { color: var(--red);   background: rgba(239,68,68,0.05); }
+.naming-head.good { color: var(--green); background: rgba(34,197,94,0.05); }
+.naming-row { padding: 14px 20px; font-family: var(--font-mono); font-size: 13px; border-bottom: 1px solid var(--border-subtle); }
+.naming-row:last-child { border-bottom: none; }
+.naming-row.bad  { color: #666; text-decoration: line-through; text-decoration-color: var(--red); }
+.naming-row.good { color: var(--text); }
+.tokenmaxxing-cta {
+  margin-top: 48px; text-align: center; font-size: 19px; font-style: italic;
+  color: var(--text-muted); max-width: 540px; margin-left: auto; margin-right: auto;
+  line-height: 1.6;
+}
+
+/* ── FOOTER ── */
+footer { padding: 64px 0 40px; border-top: 1px solid var(--border); }
+.footer-inner { display: flex; flex-direction: column; align-items: center; gap: 20px; text-align: center; }
+.footer-logo { font-family: var(--font-mono); font-size: 15px; color: var(--accent); font-weight: 500; }
+.footer-tagline { font-size: 14px; color: var(--text-muted); max-width: 460px; line-height: 1.7; }
+.footer-links { display: flex; gap: 28px; }
+.footer-links a { font-size: 13px; color: var(--text-dim); text-decoration: none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--text); }
+.footer-disclaimer { font-size: 11px; color: #333; margin-top: 8px; }
+
+/* ── REVEAL ── */
+.reveal {
+  opacity: 0; transform: translateY(22px);
+  transition: opacity 0.65s cubic-bezier(.16,1,.3,1), transform 0.65s cubic-bezier(.16,1,.3,1);
+}
+.reveal.visible { opacity: 1; transform: translateY(0); }
+.d1 { transition-delay: 0.1s; }
+.d2 { transition-delay: 0.2s; }
+.d3 { transition-delay: 0.3s; }
+.d4 { transition-delay: 0.4s; }
+.d5 { transition-delay: 0.5s; }
+
+/* ── COMPARISON ── */
+.cmp-wrap {
+  display: grid; grid-template-columns: 1fr 40px 1fr;
+  border: 1px solid var(--border); border-radius: 16px;
+  overflow: hidden; background: var(--surface);
+}
+.cmp-panel { padding: 36px 32px 28px; }
+.cmp-panel-old { border-right: 1px solid var(--border); }
+.cmp-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 24px; padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.cmp-panel-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; }
+.cmp-panel-old .cmp-panel-title { color: var(--text-dim); }
+.cmp-panel-new .cmp-panel-title { color: var(--accent); }
+.cmp-count {
+  font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+}
+.cmp-count-old { background: rgba(255,255,255,0.04); color: var(--text-dim); border: 1px solid var(--border); }
+.cmp-count-new { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(0,212,255,0.2); }
+.cmp-flow { display: flex; flex-direction: column; align-items: stretch; }
+/* Old nodes */
+.cmp-node-old {
+  border: 1px solid rgba(255,255,255,0.06); border-radius: 6px;
+  padding: 9px 14px; font-size: 12px; color: #505050; text-align: center;
+}
+.cmp-node-old-success { color: rgba(34,197,94,0.35); border-color: rgba(34,197,94,0.1); }
+.cmp-arrow-old {
+  width: 1px; height: 14px; background: rgba(255,255,255,0.07);
+  margin: 2px auto; position: relative;
+}
+.cmp-arrow-old::after {
+  content: ''; position: absolute; bottom: -3px; left: 50%; transform: translateX(-50%);
+  border-left: 3px solid transparent; border-right: 3px solid transparent;
+  border-top: 4px solid rgba(255,255,255,0.07);
+}
+/* New nodes */
+.cmp-node-new {
+  background: var(--accent-dim); border: 1px solid rgba(0,212,255,0.15);
+  border-radius: 9px; padding: 16px 20px; font-size: 15px; font-weight: 500;
+  color: var(--text); text-align: center;
+}
+.cmp-node-llm {
+  display: flex; flex-direction: column; gap: 5px;
+  background: rgba(0,212,255,0.09); border-color: rgba(0,212,255,0.3);
+  box-shadow: 0 0 28px rgba(0,212,255,0.1);
+}
+.cmp-llm-label { font-size: 16px; font-weight: 600; }
+.cmp-llm-model { font-size: 11px; font-family: var(--font-mono); color: var(--accent); opacity: 0.7; }
+.cmp-node-segfault { background: rgba(239,68,68,0.06); border-color: rgba(239,68,68,0.15); color: var(--text); }
+.cmp-asterisk { color: var(--red); font-weight: 700; }
+.cmp-arrow-new {
+  width: 2px; height: 28px; background: rgba(0,212,255,0.25);
+  margin: 4px auto; position: relative;
+}
+.cmp-arrow-new::after {
+  content: ''; position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%);
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 6px solid rgba(0,212,255,0.25);
+}
+.cmp-vs {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800; color: var(--text-dim); letter-spacing: 0.1em;
+  writing-mode: vertical-rl; border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+}
+.cmp-footnote { margin-top: 16px; font-size: 11px; color: var(--text-dim); text-align: center; font-style: italic; }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 900px) {
+  .features-grid    { grid-template-columns: repeat(2,1fr); }
+  .modalities-grid  { grid-template-columns: 1fr; }
+  .testimonials-grid{ grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .counters         { grid-template-columns: repeat(2,1fr); }
+  .features-grid    { grid-template-columns: 1fr; }
+  .nav-links        { display: none; }
+  .hero             { padding: 120px 0 80px; }
+  .hero-subtitle    { font-size: 16px; }
+  .cmp-wrap         { grid-template-columns: 1fr; }
+  .cmp-vs           { writing-mode: horizontal-tb; padding: 14px; border: none; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .cmp-panel-old    { border-right: none; border-bottom: 1px solid var(--border); }
+}
+@media (max-width: 400px) {
+  .counters { grid-template-columns: 1fr; }
+}
+  </style>
+</head>
+<body>
+<canvas id="bg-canvas"></canvas>
+
+<!-- NAV -->
+<nav id="nav">
+  <div class="nav-inner">
+    <a href="#" class="nav-logo">sloppiler</a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#modalities">Modes</a>
+      <a href="#track-record">Track Record</a>
+      <a href="https://github.com/Toemmsen96/sloppiler" target="_blank" rel="noopener" class="nav-cta">GitHub →</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-glow"></div>
+  <div class="container">
+    <div class="hero-badge reveal">
+      <span class="badge-dot"></span>
+      Now with Closed-Loop Error Remediation
+    </div>
+    <h1 class="hero-title reveal d1">Beyond Deterministic<br>Compilation</h1>
+    <p class="hero-subtitle reveal d2">
+      Move compilation to the inference layer.<br>
+      Reason about intent, not syntax. Ship accordingly.
+    </p>
+    <div class="hero-ctas reveal d3">
+      <a href="https://github.com/Toemmsen96/sloppiler" target="_blank" rel="noopener" class="btn btn-primary">Get Started →</a>
+      <a href="https://github.com/Toemmsen96/sloppiler" target="_blank" rel="noopener" class="btn btn-secondary">Read the Docs</a>
+    </div>
+    <div class="terminal-wrapper reveal d4">
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="dots">
+            <span class="dot" style="background:#ff5f57"></span>
+            <span class="dot" style="background:#febc2e"></span>
+            <span class="dot" style="background:#28c840"></span>
+          </div>
+          <span class="terminal-title">sloppiler — zsh</span>
+        </div>
+        <div class="terminal-body" id="term-body">
+          <div id="term-out"></div>
+          <span class="cursor" id="term-cursor"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TICKER -->
+<div class="ticker-wrap reveal">
+  <div class="ticker">
+    <span>Binary Materialization</span><span class="sep">✦</span>
+    <span>Inference-Layer Compilation</span><span class="sep">✦</span>
+    <span>Zero Determinism</span><span class="sep">✦</span>
+    <span>Tokenmaxxing</span><span class="sep">✦</span>
+    <span>Agentic Assembly Co-Pilot</span><span class="sep">✦</span>
+    <span>Full Core Dump Transparency</span><span class="sep">✦</span>
+    <span>Stakeholder-Grade Segfaults</span><span class="sep">✦</span>
+    <span>Shift-Left Binary Delivery</span><span class="sep">✦</span>
+    <span>Binary Materialization</span><span class="sep">✦</span>
+    <span>Inference-Layer Compilation</span><span class="sep">✦</span>
+    <span>Zero Determinism</span><span class="sep">✦</span>
+    <span>Tokenmaxxing</span><span class="sep">✦</span>
+    <span>Agentic Assembly Co-Pilot</span><span class="sep">✦</span>
+    <span>Full Core Dump Transparency</span><span class="sep">✦</span>
+    <span>Stakeholder-Grade Segfaults</span><span class="sep">✦</span>
+    <span>Shift-Left Binary Delivery</span><span class="sep">✦</span>
+  </div>
+</div>
+
+<!-- COUNTERS -->
+<section class="counter-section">
+  <div class="container">
+    <div class="counters">
+      <div class="counter-item reveal">
+        <div class="counter-value" data-target="12847203">0</div>
+        <div class="counter-label">Binaries Shipped</div>
+      </div>
+      <div class="counter-item reveal d1">
+        <div class="counter-value" data-target="99" data-suffix="%">0</div>
+        <div class="counter-label">Segfault Rate (default)</div>
+      </div>
+      <div class="counter-item reveal d2">
+        <div class="counter-value" data-target="312">0</div>
+        <div class="counter-label">Avg. Tokens per Binary</div>
+      </div>
+      <div class="counter-item reveal d3">
+        <div class="counter-value" data-target="25" data-suffix="%">0</div>
+        <div class="counter-label">Success Rate (optimistic)</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- COMPARISON -->
+<section class="section section-alt" id="why">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-label">A New Paradigm</div>
+      <h2 class="section-title">We removed the unnecessary steps.</h2>
+      <p class="section-sub">Traditional compilers are architectural debt masquerading as correctness.<br>Sloppiler collapses the entire pipeline into a single inference call.</p>
+    </div>
+    <div class="cmp-wrap reveal">
+
+      <!-- LEFT: traditional -->
+      <div class="cmp-panel cmp-panel-old">
+        <div class="cmp-panel-header">
+          <span class="cmp-panel-title">GCC / Clang</span>
+          <span class="cmp-count cmp-count-old">12 steps</span>
+        </div>
+        <div class="cmp-flow">
+          <div class="cmp-node cmp-node-old">Source Code</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Preprocessor</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Lexical Analysis</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Parser → AST</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Semantic Analysis</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Type Checking</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">IR Generation</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Optimization Passes</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Register Allocation</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Code Generation</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Assembler</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old">Linker</div>
+          <div class="cmp-arrow cmp-arrow-old"></div>
+          <div class="cmp-node cmp-node-old cmp-node-old-success">Binary ✓</div>
+        </div>
+      </div>
+
+      <!-- DIVIDER -->
+      <div class="cmp-vs">vs</div>
+
+      <!-- RIGHT: sloppiler -->
+      <div class="cmp-panel cmp-panel-new">
+        <div class="cmp-panel-header">
+          <span class="cmp-panel-title">Sloppiler</span>
+          <span class="cmp-count cmp-count-new">3 steps</span>
+        </div>
+        <div class="cmp-flow">
+          <div class="cmp-node cmp-node-new">Source Code</div>
+          <div class="cmp-arrow cmp-arrow-new"></div>
+          <div class="cmp-node cmp-node-new cmp-node-llm">
+            <span class="cmp-llm-label">LLM Inference</span>
+          </div>
+          <div class="cmp-arrow cmp-arrow-new"></div>
+          <div class="cmp-node cmp-node-new cmp-node-segfault">Binary <span class="cmp-asterisk">*</span></div>
+        </div>
+        <p class="cmp-footnote">* segfault rate not guaranteed to be low</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="section" id="features">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-label">Key Differentiators</div>
+      <h2 class="section-title">The compiler primitive,<br>reimagined for the inference era.</h2>
+      <p class="section-sub">Everything your legacy toolchain refused to do.</p>
+    </div>
+    <div class="features-grid">
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="9" height="9" rx="1.5"/><rect x="13" y="2" width="9" height="9" rx="1.5"/>
+            <rect x="2" y="13" width="9" height="9" rx="1.5"/><rect x="13" y="13" width="9" height="9" rx="1.5"/>
+            <circle cx="5.5" cy="5.5" r="1.1" fill="currentColor" stroke="none"/>
+            <circle cx="18.5" cy="5.5" r="1.1" fill="currentColor" stroke="none"/>
+            <circle cx="5.5" cy="18.5" r="1.1" fill="currentColor" stroke="none"/>
+            <circle cx="15.5" cy="15.5" r="1.1" fill="currentColor" stroke="none"/>
+            <circle cx="18.5" cy="18.5" r="1.1" fill="currentColor" stroke="none"/>
+          </svg>
+        </div>
+        <div class="feature-title">Zero Determinism</div>
+        <div class="feature-desc">Every build is a unique stakeholder experience. Reproducibility is a legacy constraint inherited from a less creative era.</div>
+      </div>
+
+      <div class="feature-card reveal d1">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+          </svg>
+        </div>
+        <div class="feature-title">Polyglot-Native Input</div>
+        <div class="feature-desc">Not bound by the grammar constraints of any single language specification. Intent is the interface. Syntax is optional.</div>
+      </div>
+
+      <div class="feature-card reveal d2">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          </svg>
+        </div>
+        <div class="feature-title">Blazing-Fast Time-to-Segfault</div>
+        <div class="feature-desc">Ship your binary deliverable in seconds. Velocity is a competitive advantage. What you do with it is up to you.</div>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M9 9c0-1.5 2-3 3-1.5 1 1.5 0 3-3 3v1.5"/>
+            <circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"/>
+          </svg>
+        </div>
+        <div class="feature-title">Segfault-as-a-Feature</div>
+        <div class="feature-desc">Full core dump transparency. No silent failures. Every crash is a learning opportunity the enterprise can build upon.</div>
+      </div>
+
+      <div class="feature-card reveal d1">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+        </div>
+        <div class="feature-title">Fully On-Premise Inference</div>
+        <div class="feature-desc">Your data. Your model. Your segfault. Zero exfiltration surface. Complete stakeholder data sovereignty.</div>
+      </div>
+
+      <div class="feature-card reveal d2">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="8" r="5"/>
+            <path d="M8 8c0-2.2 1.8-4 4-4"/>
+            <path d="M3 21c0-4 4-7 9-7s9 3 9 7"/>
+            <circle cx="12" cy="8" r="1.5" fill="currentColor" stroke="none"/>
+          </svg>
+        </div>
+        <div class="feature-title">Agentic Assembly Co-Pilot</div>
+        <div class="feature-desc">The <code>--optimistic</code> flag engages the LLM as a synergistic compilation partner. Sometimes it works.</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- MODALITIES -->
+<section class="section section-alt" id="modalities">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-label">Compilation Modalities</div>
+      <h2 class="section-title">Three tiers of binary materialization.</h2>
+      <p class="section-sub">Choose your risk profile. Ship accordingly.</p>
+    </div>
+    <div class="modalities-grid">
+
+      <div class="modality-card reveal">
+        <div class="modality-tier">Core</div>
+        <div class="modality-title">Frictionless Binary Ideation</div>
+        <div class="modality-desc">Direct-to-segfault pipeline. Zero intermediate representation. ELF header synthesized for kernel compatibility. Our flagship zero-abstraction experience.</div>
+        <div class="code-block">
+<span class="cp">$</span> <span class="cc">sloppiler -model codellama main.c -o hello</span>
+<span class="cm">✓  hello  9256 bytes  —  shipped to production.</span>
+
+<span class="cp">$</span> <span class="cc">./hello</span>
+<span class="ce">zsh: segmentation fault (core dumped)  ./hello</span>
+        </div>
+      </div>
+
+      <div class="modality-card reveal d1">
+        <div class="modality-tier">Optimistic</div>
+        <div class="modality-title">Agentic Assembly Co-Pilot</div>
+        <div class="modality-desc">Routes output through nasm and ld for binary materialization. Assembly generated holistically from source semantics, bypassing intermediate layers.</div>
+        <div class="code-block">
+<span class="cp">$</span> <span class="cc">sloppiler --optimistic \
+    -model codellama main.c -o hello</span>
+<span class="cm">✓  hello  6432 bytes  —  shipped to production.</span>
+
+<span class="cp">$</span> <span class="cc">./hello</span>
+<span class="ce">zsh: segmentation fault (core dumped)  ./hello</span>
+        </div>
+      </div>
+
+      <div class="modality-card reveal d2">
+        <div class="modality-tier">Enterprise</div>
+        <div class="modality-title">Closed-Loop Error Remediation</div>
+        <div class="modality-desc">Compiler errors fed back for up to N self-correction cycles. A closed-loop pipeline that continuously realigns output quality with ground truth.</div>
+        <div class="code-block">
+<span class="cp">$</span> <span class="cc">sloppiler --optimistic --loop 5 \
+    -model codellama main.c -o hello</span>
+<span class="cm">↻  cycle 1/5: realigning with ground truth...</span>
+<span class="cm">↻  cycle 2/5: realigning with ground truth...</span>
+<span class="ce">zsh: segmentation fault (core dumped)  ./hello</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- TRACK RECORD -->
+<section class="section" id="track-record">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-label">Production Benchmarks</div>
+      <h2 class="section-title">Track record.</h2>
+      <p class="section-sub">Independent results across real production workloads.</p>
+    </div>
+    <div class="table-wrap reveal">
+      <table>
+        <thead>
+          <tr>
+            <th>Mode</th><th>Model</th><th>Output</th><th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>default</code></td>
+            <td style="color:var(--text)">phi3</td>
+            <td><code>is nothealing.!</code> wrapped in ELF</td>
+            <td><span class="res-fail">segfault</span></td>
+          </tr>
+          <tr>
+            <td><code>default</code></td>
+            <td style="color:var(--text)">codellama</td>
+            <td>nested ELF headers</td>
+            <td><span class="res-fail">segfault</span></td>
+          </tr>
+          <tr>
+            <td><code>optimistic</code></td>
+            <td style="color:var(--text)">phi3</td>
+            <td><code>assembly</code> on line 1</td>
+            <td><span class="res-warn">nasm error</span></td>
+          </tr>
+          <tr class="win-row">
+            <td><code>optimistic</code></td>
+            <td style="color:var(--text)">codellama</td>
+            <td>valid binary, <code>Hello, world!</code> printed</td>
+            <td><span class="res-win">worked!</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="table-caption reveal">Independent benchmark results across production workloads. Q4 results pending.</p>
+  </div>
+</section>
+
+<!-- TESTIMONIALS -->
+<section class="section section-alt">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-label">Testimonials</div>
+      <h2 class="section-title">Trusted by engineering teams<br>at the frontier.</h2>
+    </div>
+    <div class="testimonials-grid">
+
+      <div class="testimonial-card reveal">
+        <p class="t-quote">We migrated our entire binary materialization pipeline to Sloppiler last quarter. The segfault rate was already in our OKRs.</p>
+        <div><div class="t-name">Maya R.</div><div class="t-role">Principal Inference Engineer, Segfault Capital LLC</div></div>
+      </div>
+
+      <div class="testimonial-card reveal d1">
+        <p class="t-quote">Sloppiler eliminated the pedantic intermediate steps that were holding back our velocity. GCC was just too opinionated.</p>
+        <div><div class="t-name">Jonas K.</div><div class="t-role">Staff Compiler Whisperer, Null Pointer Dynamics Inc.</div></div>
+      </div>
+
+      <div class="testimonial-card reveal d2">
+        <p class="t-quote">The --optimistic flag printed Hello, World! on the third try. We shipped it.</p>
+        <div><div class="t-name">Priya S.</div><div class="t-role">Head of Agentic Toolchain, Undefined Behavior Corp.</div></div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- MODEL COMPAT -->
+<section class="section" id="models">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-label">Compatibility Matrix</div>
+      <h2 class="section-title">Model recommendations.</h2>
+      <p class="section-sub">Not all inference profiles are equal. Choose wisely.</p>
+    </div>
+    <div class="table-wrap reveal">
+      <table>
+        <thead>
+          <tr><th>Model</th><th>Inference Profile</th><th>Recommended For</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="model-pill">codellama</span></td>
+            <td style="color:var(--text-muted)">Strong binary output fidelity. Highest semantic alignment in <code>--optimistic</code> mode.</td>
+            <td><span class="prod-badge">★ Production</span></td>
+          </tr>
+          <tr>
+            <td><span class="model-pill">phi3</span></td>
+            <td style="color:var(--text-muted)">Fastest inference. Highest creative latitude in output generation.</td>
+            <td style="color:var(--text-muted)">Rapid stakeholder iteration</td>
+          </tr>
+          <tr>
+            <td><span class="model-pill">llama3</span></td>
+            <td style="color:var(--text-muted)">Verbose output with extensive reasoning traces. Prioritizes explanation over materialization.</td>
+            <td style="color:var(--text-muted)">Teams that prefer to understand before shipping</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- TOKENMAXXING -->
+<section class="section section-alt" id="tokenmaxxing">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-label">Engineering Culture</div>
+      <h2 class="section-title">Tokenmaxxing.</h2>
+      <p class="section-sub" style="max-width:580px;margin:0 auto">
+        Contributions are evaluated in part by token density. Sparse, human-legible code suggests
+        insufficient model engagement. A well-contributed function should require a non-trivial
+        inference budget to produce. If you wrote it yourself, it isn't ready.
+      </p>
+    </div>
+    <div class="naming-wrap reveal">
+      <div class="naming-col">
+        <div class="naming-head bad">✗ &nbsp;Banned</div>
+        <div class="naming-row bad">i</div>
+        <div class="naming-row bad">tmp</div>
+        <div class="naming-row bad">err</div>
+        <div class="naming-row bad">buf</div>
+      </div>
+      <div class="naming-col">
+        <div class="naming-head good">✓ &nbsp;Approved</div>
+        <div class="naming-row good">iterationIndexVector</div>
+        <div class="naming-row good">ephemeralComputationArtifact</div>
+        <div class="naming-row good">remediationOpportunity</div>
+        <div class="naming-row good">inferenceOutputBuffer</div>
+      </div>
+    </div>
+    <p class="tokenmaxxing-cta reveal">"If a model didn't generate it, it probably isn't verbose enough."</p>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <div class="footer-logo">sloppiler</div>
+      <p class="footer-tagline">The only compiler built on the insight that your code doesn't need to be understood — it needs to be shipped.</p>
+      <div class="footer-links">
+        <a href="https://github.com/Toemmsen96/sloppiler" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/Toemmsen96/sloppiler/blob/master/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
+      </div>
+      <p class="footer-disclaimer">This clearly is a joke and doesn't really work well. I am not responsible for you bricking your PC.</p>
+    </div>
+  </div>
+</footer>
+
+<script>
+// ── Nav scroll ──────────────────────────────────────────────────────────────
+const nav = document.getElementById('nav');
+window.addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 20), { passive: true });
+
+// ── Scroll reveal ───────────────────────────────────────────────────────────
+const revealObs = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); revealObs.unobserve(e.target); } });
+}, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
+document.querySelectorAll('.reveal').forEach(el => revealObs.observe(el));
+
+// Force hero visible on load
+requestAnimationFrame(() =>
+  document.querySelectorAll('.hero .reveal, .ticker-wrap').forEach(el => el.classList.add('visible'))
+);
+
+// ── Terminal animation ──────────────────────────────────────────────────────
+const LINES = [
+  { t: '$ sloppiler --optimistic -model qwen2.5-coder:1.5b main.c -o hello', c: 't-prompt', d: 500 },
+  { t: '', d: 180 },
+  { t: '  sloppiler  qwen2.5-coder:1.5b  →  main.c  [optimistic · linux]', c: 't-hdr', d: 280 },
+  { t: '', d: 180 },
+  { t: '  ✓  ingesting source artifacts',                     c: 't-ok', d: 380 },
+  { t: '  ✓  constructing semantic knowledge graph',          c: 't-ok', d: 580 },
+  { t: '  ✓  running AI-powered static analysis',            c: 't-ok', d: 460 },
+  { t: '  ✓  leveraging agentic optimization pipeline',      c: 't-ok', d: 680 },
+  { t: '  ✓  co-piloting assembly generation with LLM',      c: 't-ok', d: 580 },
+  { t: '  ✓  orchestrating nasm integration layer',          c: 't-ok', d: 460 },
+  { t: '  ✓  executing ld synergy workflow',                 c: 't-ok', d: 420 },
+  { t: '  ✓  synthesizing binary deliverable  (312 tokens)', c: 't-ok', d: 780 },
+  { t: '', d: 380 },
+  { t: '  ✓  hello  9256 bytes  —  binary deliverable shipped to production.', c: 't-ok', d: 560 },
+  { t: '', d: 1600 },
+  { t: '$ ./hello', c: 't-prompt', d: 380 },
+  { t: 'zsh: segmentation fault (core dumped)  ./hello', c: 't-err', d: 280 },
+];
+
+const termOut    = document.getElementById('term-out');
+const termBody   = document.getElementById('term-body');
+const termCursor = document.getElementById('term-cursor');
+let idx = 0;
+
+function nextLine() {
+  if (idx >= LINES.length) {
+    setTimeout(() => { termOut.innerHTML = ''; idx = 0; nextLine(); }, 3200);
+    return;
+  }
+  const { t, c, d } = LINES[idx++];
+  setTimeout(() => {
+    const span = document.createElement('span');
+    span.className = 't-line' + (c ? ' ' + c : '');
+    span.textContent = t;
+    termOut.appendChild(span);
+    termOut.appendChild(document.createElement('br'));
+    termBody.scrollTop = termBody.scrollHeight;
+    nextLine();
+  }, d);
+}
+nextLine();
+
+// ── Feature card spotlight ──────────────────────────────────────────────────
+document.querySelectorAll('.feature-card').forEach(card => {
+  card.addEventListener('mousemove', e => {
+    const r = card.getBoundingClientRect();
+    card.style.setProperty('--mx', `${e.clientX - r.left}px`);
+    card.style.setProperty('--my', `${e.clientY - r.top}px`);
+  });
+  card.addEventListener('mouseleave', () => {
+    card.style.setProperty('--mx', '-9999px');
+    card.style.setProperty('--my', '-9999px');
+  });
+});
+
+// ── Counter animation ───────────────────────────────────────────────────────
+function animCount(el, target, suffix) {
+  const t0 = performance.now();
+  const dur = 2000;
+  (function tick(now) {
+    const p = Math.min((now - t0) / dur, 1);
+    const ease = 1 - Math.pow(1 - p, 3);
+    el.textContent = Math.floor(ease * target).toLocaleString() + suffix;
+    if (p < 1) requestAnimationFrame(tick);
+  })(t0);
+}
+
+const cntObs = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      animCount(e.target, +e.target.dataset.target, e.target.dataset.suffix || '');
+      cntObs.unobserve(e.target);
+    }
+  });
+}, { threshold: 0.5 });
+document.querySelectorAll('.counter-value').forEach(el => cntObs.observe(el));
+
+// ── Particle field ──────────────────────────────────────────────────────────
+(function () {
+  const canvas = document.getElementById('bg-canvas');
+  const ctx    = canvas.getContext('2d');
+  const N = 100, LINK = 145, REP_R = 180, REP_F = 1.4;
+  let W, H, pts, mx = -9999, my = -9999, raf;
+
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+
+  function mkPt() {
+    return {
+      x:  Math.random() * W,
+      y:  Math.random() * H,
+      ox: 0, oy: 0,           // original drift velocity
+      vx: (Math.random() - .5) * .35,
+      vy: (Math.random() - .5) * .35,
+      r:  Math.random() * 1.3 + .45,
+    };
+  }
+
+  function init() {
+    resize();
+    pts = Array.from({ length: N }, mkPt);
+    pts.forEach(p => { p.ox = p.vx; p.oy = p.vy; });
+  }
+
+  function frame() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Soft cursor glow
+    if (mx > 0) {
+      const g = ctx.createRadialGradient(mx, my, 0, mx, my, REP_R * 1.3);
+      g.addColorStop(0, 'rgba(0,212,255,0.07)');
+      g.addColorStop(1, 'transparent');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    for (const p of pts) {
+      // Mouse repulsion
+      const dx = p.x - mx, dy = p.y - my;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < REP_R * REP_R && d2 > 0) {
+        const d  = Math.sqrt(d2);
+        const f  = (1 - d / REP_R) * REP_F;
+        p.vx += (dx / d) * f;
+        p.vy += (dy / d) * f;
+      }
+
+      // Soft return toward natural drift
+      p.vx += (p.ox - p.vx) * 0.012;
+      p.vy += (p.oy - p.vy) * 0.012;
+
+      // Damping + speed cap
+      p.vx *= 0.96; p.vy *= 0.96;
+      const sp = Math.hypot(p.vx, p.vy);
+      if (sp > 3) { p.vx = p.vx / sp * 3; p.vy = p.vy / sp * 3; }
+
+      p.x += p.vx; p.y += p.vy;
+
+      // Wrap
+      if (p.x < -12) p.x = W + 12; else if (p.x > W + 12) p.x = -12;
+      if (p.y < -12) p.y = H + 12; else if (p.y > H + 12) p.y = -12;
+    }
+
+    // Connections
+    ctx.lineWidth = 0.6;
+    for (let i = 0; i < N; i++) {
+      for (let j = i + 1; j < N; j++) {
+        const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
+        const d  = Math.sqrt(dx * dx + dy * dy);
+        if (d < LINK) {
+          ctx.beginPath();
+          ctx.moveTo(pts[i].x, pts[i].y);
+          ctx.lineTo(pts[j].x, pts[j].y);
+          ctx.strokeStyle = `rgba(0,212,255,${(1 - d / LINK) * 0.22})`;
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Dots
+    for (const p of pts) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,212,255,0.55)';
+      ctx.fill();
+    }
+
+    raf = requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', () => { cancelAnimationFrame(raf); init(); frame(); });
+  document.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
+  document.addEventListener('mouseleave', () => { mx = -9999; my = -9999; });
+
+  init();
+  frame();
+})();
+</script>
+</body>
+</html>
