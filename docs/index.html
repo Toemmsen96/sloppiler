@@ -62,9 +62,16 @@ nav.scrolled {
   display: flex; align-items: center; justify-content: space-between;
 }
 .nav-logo {
+  display: flex; align-items: center; gap: 10px;
   font-family: var(--font-mono); font-size: 14px; font-weight: 500;
   color: var(--accent); text-decoration: none; letter-spacing: -0.02em;
 }
+.nav-org {
+  color: var(--text-dim); font-size: 13px; font-weight: 400;
+  text-decoration: none; font-family: var(--font-mono);
+  letter-spacing: -0.02em; transition: color 0.2s;
+}
+.nav-org:hover { color: var(--text-muted); }
 .nav-links { display: flex; align-items: center; gap: 32px; }
 .nav-links a {
   color: var(--text-muted); text-decoration: none; font-size: 14px;
@@ -504,8 +511,9 @@ footer { padding: 64px 0 40px; border-top: 1px solid var(--border); }
 <!-- NAV -->
 <nav id="nav">
   <div class="nav-inner">
-    <a href="#" class="nav-logo">sloppiler</a>
+    <a href="https://slopstacklabs.ch" class="nav-logo">slopstack/sloppiler</a>
     <div class="nav-links">
+      <a href="https://slopstacklabs.ch" class="nav-org">← Labs</a>
       <a href="#features">Features</a>
       <a href="#modalities">Modes</a>
       <a href="#track-record">Track Record</a>
@@ -951,9 +959,10 @@ footer { padding: 64px 0 40px; border-top: 1px solid var(--border); }
 <footer>
   <div class="container">
     <div class="footer-inner">
-      <div class="footer-logo">sloppiler</div>
+      <div class="footer-logo">slopstack/sloppiler</div>
       <p class="footer-tagline">The only compiler built on the insight that your code doesn't need to be understood — it needs to be shipped.</p>
       <div class="footer-links">
+        <a href="https://slopstacklabs.ch" target="_blank" rel="noopener">slopstack/labs</a>
         <a href="https://github.com/slopstack-labs/sloppiler" target="_blank" rel="noopener">GitHub</a>
         <a href="https://github.com/slopstack-labs/sloppiler/blob/master/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
       </div>
