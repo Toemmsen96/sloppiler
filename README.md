@@ -32,9 +32,18 @@ See the [Contributor Excellence Framework](CONTRIBUTING.md).
 ## Requirements
 
 - Go 1.21+ to build
-- `nasm` + `ld` (binutils) for `--optimistic` mode only
+- For `--optimistic` mode only:
+  - `--arch=amd64`: `nasm` + `ld` (binutils)
+  - `--arch=arm64`: `as` (GNU assembler / Xcode command line tools) + an arm64-capable `ld`
 - **For `--provider=local`:** [Ollama](https://ollama.com) running locally with a model pulled
 - **For `--provider=openai|google|claude`:** a valid API key surfaced via `--api-key` or the `SLOPPILER_API_KEY` environment variable
+
+## Target architecture (`--arch`)
+
+`--arch` controls the CPU architecture of the materialized binary (`amd64` default, or `arm64`).
+
+- **Default (hex) mode:** fully supported for both architectures and all targets — the synthesized ELF / PE / Mach-O header is stamped with the correct machine field (`x86-64`/`AArch64` for ELF, `AMD64`/`ARM64` for PE, `x86_64`/`arm64` for Mach-O).
+- **Optimistic mode:** `amd64` routes through NASM as before; `arm64` routes through the GNU assembler (`as`) with an AArch64 prompt. arm64 `--optimistic` is currently supported for `--target=linux` only — macOS arm64 requires dynamic linking against libSystem plus code signing (which the static assemble-and-link pipeline cannot provide), and Windows arm64 is not wired up yet. For arm64 macOS/Windows binaries, use default (hex) mode, or `--arch=amd64` for `--optimistic`.
 
 ## Build
 
@@ -63,9 +72,12 @@ MODEL=codellama ./run.sh main.c hello
 | `-o` | `a.out` | Output binary path |
 | `-ollama` | `http://localhost:11434/api/generate` | Ollama API URL (only honoured with `--provider=local`) |
 | `--target` | `linux` | Target OS for binary materialization: `linux`, `windows`, `darwin` |
-| `--optimistic` | false | Engage agentic assembly co-pilot (requires nasm + ld) |
-| `--loop N` | 0 | Re-align LLM outputs with ground truth up to N times on nasm failure |
+| `--arch` | `amd64` | Target CPU architecture: `amd64`, `arm64` |
+| `--optimistic` | false | Engage agentic assembly co-pilot (requires nasm + ld for amd64, or `as` + ld for arm64) |
+| `--loop N` | 0 | Re-align LLM outputs with ground truth up to N times on assembler failure |
 | `--force-iterate N` | 0 | Proactively enhance output quality for N cycles even on success |
+| `--timeout N` | 300 | HTTP request timeout in seconds per LLM call (`0` = no timeout) |
+| `--verbose` | false | Verbose debug output: HTTP requests, status codes, and streaming milestones |
 
 ## Compilation Modalities
 
