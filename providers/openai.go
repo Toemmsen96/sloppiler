@@ -14,7 +14,7 @@ const openAIChatCompletionsEndpointURL = "https://api.openai.com/v1/chat/complet
 
 type openAIInferenceRequest struct {
 	Model         string                        `json:"model"`
-	Messages      []openAIChatHistoryMessage     `json:"messages"`
+	Messages      []openAIChatHistoryMessage    `json:"messages"`
 	Stream        bool                          `json:"stream"`
 	StreamOptions *openAIStreamingOutputOptions `json:"stream_options,omitempty"`
 }
@@ -54,9 +54,9 @@ func NewOpenAI(model, apiKey string, providerOperationalConfig Config) *OpenAIPr
 
 func (openAIProviderConfigurationContext *OpenAIProvider) Stream(prompt string, progressSteps []string) (string, error) {
 	serializedRequestPayload, _ := json.Marshal(openAIInferenceRequest{
-		Model:    openAIProviderConfigurationContext.model,
-		Messages: []openAIChatHistoryMessage{{Role: "user", Content: prompt}},
-		Stream:   true,
+		Model:         openAIProviderConfigurationContext.model,
+		Messages:      []openAIChatHistoryMessage{{Role: "user", Content: prompt}},
+		Stream:        true,
 		StreamOptions: &openAIStreamingOutputOptions{IncludeUsage: true},
 	})
 

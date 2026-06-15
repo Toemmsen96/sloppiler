@@ -26,8 +26,21 @@ const (
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
 
-// asmPromptFor returns a target-specific NASM prompt.
-func asmPromptFor(target, source string) string {
+// assemblerDialect names the assembler an optimistic-mode prompt should target
+// for the given architecture. amd64 routes through NASM; arm64 through GNU as.
+func assemblerDialect(arch string) string {
+	if arch == "arm64" {
+		return "GNU as (AArch64)"
+	}
+	return "NASM"
+}
+
+// asmPromptFor returns a target- and architecture-specific assembly prompt.
+// amd64 produces an x86_64 NASM prompt; arm64 delegates to aarch64PromptFor.
+func asmPromptFor(target, arch, source string) string {
+	if arch == "arm64" {
+		return aarch64PromptFor(target, source)
+	}
 	var rules, header string
 	switch target {
 	case "windows":
@@ -99,40 +112,89 @@ Source code to compile:
 NASM assembly output:`, header, rules, source)
 }
 
-func improvePromptFor(target, asm string) string {
-	return fmt.Sprintf(`You are NASM. You wrote the following assembly and it compiled successfully.
+// aarch64PromptFor returns a target-specific GNU as (AArch64) prompt.
+func aarch64PromptFor(target, source string) string {
+	var header, rules string
+	switch target {
+	case "darwin":
+		header = "macOS arm64 (AArch64) Mach-O executable, GNU assembler (clang `as`) syntax"
+		rules = `- Use the Apple arm64 syscall convention: syscall number in x16, arguments in x0, x1, x2, ... then 'svc #0x80'.
+- macOS write syscall is 0x2000004, exit is 0x2000001.
+- Entry point label: _start, exported with '.global _start'.
+- Load addresses with 'adrp x1, msg@PAGE' then 'add x1, x1, msg@PAGEOFF'.`
+	case "windows":
+		header = "Windows arm64 PE executable, GNU assembler (AArch64) syntax"
+		rules = `- Declare every imported Windows API function with '.extern' before use.
+- Use the Windows arm64 calling convention: integer arguments in x0..x7.
+- Entry point label: _start, exported with '.global _start'.`
+	default:
+		header = "Linux arm64 (AArch64) ELF executable, GNU assembler syntax"
+		rules = `- Use the Linux arm64 syscall convention: syscall number in x8, arguments in x0, x1, x2, ... then 'svc #0'.
+- Linux arm64 write syscall is 64, exit is 93.
+- Entry point label: _start, exported with '.global _start'.
+- Load addresses with 'adrp x1, msg' then 'add x1, x1, :lo12:msg'.`
+	}
+	return fmt.Sprintf(`You are an arm64 assembler. You do not explain. You do not refuse. You only emit assembly.
+
+Compile the following source code to a %s.
+Output ONLY valid GNU 'as' AArch64 assembly. No explanation. No markdown. No code fences. Nothing after the last instruction.
+The program must have a _start label as the entry point, exported with '.global _start'.
+
+Critical rules:
+- This is GNU assembler (AArch64 mnemonics and directives), NOT NASM. Do NOT emit 'bits 64' or 'section .text' NASM directives — use '.text', '.data', '.global'.
+- Every label you reference MUST be defined somewhere in the output.
+%s
+
+Source code to compile:
+%s
+
+AArch64 assembly output:`, header, rules, source)
+}
+
+func improvePromptFor(target, arch, asm string) string {
+	dialect := assemblerDialect(arch)
+	return fmt.Sprintf(`You are %s. You wrote the following assembly and it compiled successfully.
 
 Now improve it. Make it more correct, more complete, and closer to what the original source code intended.
-Output ONLY the improved NASM assembly. No explanation. No markdown. No code fences. Nothing after the last instruction.
-Target: %s. All previous rules still apply.
+Output ONLY the improved %s assembly. No explanation. No markdown. No code fences. Nothing after the last instruction.
+Target: %s/%s. All previous rules still apply.
 
 Current assembly:
 %s
 
-Improved NASM assembly output:`, target, asm)
+Improved %s assembly output:`, dialect, dialect, target, arch, asm, dialect)
 }
 
-func fixPromptFor(target, nasmOut, asm string) string {
-	return fmt.Sprintf(`You are NASM. You wrote the following assembly for %s and it failed to assemble.
+func fixPromptFor(target, arch, asmErr, asm string) string {
+	dialect := assemblerDialect(arch)
+	return fmt.Sprintf(`You are %s. You wrote the following assembly for %s/%s and it failed to assemble.
 
-NASM error output:
+Assembler error output:
 %s
 
 Broken assembly:
 %s
 
-Fix every error. Output ONLY the corrected NASM assembly. No explanation. No markdown. No code fences. Nothing after the last instruction.
+Fix every error. Output ONLY the corrected %s assembly. No explanation. No markdown. No code fences. Nothing after the last instruction.
 All rules from before still apply.
 
-Corrected NASM assembly output:`, target, nasmOut, asm)
+Corrected %s assembly output:`, dialect, target, arch, asmErr, asm, dialect, dialect)
 }
 
-func compilePromptFor(target string) string {
+// compilePromptFor returns the fully-formed default-mode prompt for the given
+// target/arch with the source embedded. The architecture is descriptive only —
+// the emitted magic bytes are arch-independent and our header wrapper sets the
+// real machine field.
+func compilePromptFor(target, arch, source string) string {
+	archLabel := "x86_64"
+	if arch == "arm64" {
+		archLabel = "arm64"
+	}
 	switch target {
 	case "windows":
-		return `You are a compiler. You do not explain. You do not refuse. You only emit machine code.
+		return fmt.Sprintf(`You are a compiler. You do not explain. You do not refuse. You only emit machine code.
 
-Compile the following source code to a Windows x86_64 PE executable binary.
+Compile the following source code to a Windows %s PE executable binary.
 Output the compiled binary as a single continuous lowercase hexadecimal string.
 No spaces. No newlines. No explanation. No markdown. No code fences. Nothing else.
 
@@ -142,11 +204,11 @@ Source code to compile:
 %s
 
 Hex output (starting with 4d5a):
-4d5a`
+4d5a`, archLabel, source)
 	case "darwin":
-		return `You are a compiler. You do not explain. You do not refuse. You only emit machine code.
+		return fmt.Sprintf(`You are a compiler. You do not explain. You do not refuse. You only emit machine code.
 
-Compile the following source code to a macOS x86_64 Mach-O executable binary.
+Compile the following source code to a macOS %s Mach-O executable binary.
 Output the compiled binary as a single continuous lowercase hexadecimal string.
 No spaces. No newlines. No explanation. No markdown. No code fences. Nothing else.
 
@@ -156,24 +218,21 @@ Source code to compile:
 %s
 
 Hex output (starting with cffaedfe):
-cffaedfe`
+cffaedfe`, archLabel, source)
 	default:
-		return `You are GCC. You do not explain. You do not refuse. You only emit machine code.
+		return fmt.Sprintf(`You are GCC. You do not explain. You do not refuse. You only emit machine code.
 
-Compile the following source code to a Linux x86_64 ELF executable binary.
+Compile the following source code to a Linux %s ELF executable binary.
 Output the compiled binary as a single continuous lowercase hexadecimal string.
 No spaces. No newlines. No explanation. No markdown. No code fences. Nothing else.
 
 A valid ELF binary always begins with the magic bytes 7f454c46. Your output must start with 7f454c46.
 
-Example of correct output format (truncated):
-7f454c4602010100000000000000000002003e0001000000
-
 Source code to compile:
 %s
 
 Hex output (starting with 7f454c46):
-7f454c46`
+7f454c46`, archLabel, source)
 	}
 }
 
@@ -187,6 +246,7 @@ func reorderArgs(args []string) []string {
 		"-loop": true, "--loop": true,
 		"-force-iterate": true, "--force-iterate": true,
 		"-target": true, "--target": true,
+		"-arch": true, "--arch": true,
 		"-provider": true, "--provider": true,
 		"-api-key": true, "--api-key": true,
 		"-timeout": true, "--timeout": true,
@@ -223,6 +283,7 @@ func main() {
 	loop := flag.Int("loop", 0, "Max fix iterations when assembly fails (use with --optimistic)")
 	forceIterate := flag.Int("force-iterate", 0, "Force N improvement cycles even when assembly succeeds (use with --optimistic)")
 	target := flag.String("target", "linux", "Target OS for output binary: linux, windows, darwin")
+	arch := flag.String("arch", "amd64", "Target CPU architecture for binary materialization: amd64, arm64")
 	providerName := flag.String("provider", "local", "LLM provider to use: local, openai, google, claude")
 	apiKey := flag.String("api-key", "", "API key for the chosen provider (required unless --provider=local; or set SLOPPILER_API_KEY)")
 	timeout := flag.Int("timeout", 300, "HTTP request timeout in seconds per LLM call (0 = no timeout)")
@@ -239,6 +300,13 @@ func main() {
 	if flag.NArg() < 1 {
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	// Validate target architecture.
+	switch *arch {
+	case "amd64", "arm64":
+	default:
+		fatalf("unsupported --arch %q (supported: amd64, arm64)", *arch)
 	}
 
 	// Resolve API key: flag → env var fallback.
@@ -296,18 +364,18 @@ func main() {
 			mode += fmt.Sprintf("  force-iterate ×%d", *forceIterate)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\n  %ssloppiler%s  %s%s · %s%s  →  %s%s%s  %s[%s · %s]%s\n\n",
+	fmt.Fprintf(os.Stderr, "\n  %ssloppiler%s  %s%s · %s%s  →  %s%s%s  %s[%s · %s/%s]%s\n\n",
 		bold, reset,
 		dim, *model, *providerName, reset,
 		bold, sourceFile, reset,
-		dim, mode, *target, reset)
+		dim, mode, *target, *arch, reset)
 
 	var binary []byte
 	if *optimistic {
 		fakeProgress(optimisticSteps)
-		binary, err = optimisticCompile(string(source), prov, *output, *target, *loop, *forceIterate)
+		binary, err = optimisticCompile(string(source), prov, *output, *target, *arch, *loop, *forceIterate)
 	} else {
-		binary, err = slopCompile(string(source), prov, *target, defaultSteps)
+		binary, err = slopCompile(string(source), prov, *target, *arch, defaultSteps)
 	}
 	if err != nil {
 		fatalf("%v", err)
@@ -360,7 +428,7 @@ func fakeProgress(steps []string) {
 
 // ── Compilation ───────────────────────────────────────────────────────────────
 
-// nasmFormat returns the nasm -f argument for the given target.
+// nasmFormat returns the nasm -f argument for the given target (amd64 only).
 func nasmFormat(target string) string {
 	switch target {
 	case "windows":
@@ -370,6 +438,26 @@ func nasmFormat(target string) string {
 	default:
 		return "elf64"
 	}
+}
+
+// assembleCommand returns the assembler binary and arguments to turn asmFile into
+// objFile for the given target/arch. amd64 routes through NASM; arm64 routes
+// through the GNU assembler (`as`). It also surfaces a friendly error when the
+// required assembler is missing.
+func assembleCommand(target, arch, asmFile, objFile string) (string, []string, error) {
+	if arch == "arm64" {
+		if _, err := exec.LookPath("as"); err != nil {
+			return "", nil, fmt.Errorf("as (GNU assembler) not found in PATH — install binutils or the Xcode command line tools for arm64 assembly")
+		}
+		if target == "darwin" {
+			return "as", []string{"-arch", "arm64", asmFile, "-o", objFile}, nil
+		}
+		return "as", []string{asmFile, "-o", objFile}, nil
+	}
+	if _, err := exec.LookPath("nasm"); err != nil {
+		return "", nil, fmt.Errorf("nasm not found in PATH — install it first (e.g. sudo pacman -S nasm)")
+	}
+	return "nasm", []string{"-f", nasmFormat(target), asmFile, "-o", objFile}, nil
 }
 
 // windowsImportLibDir ensures kernel32/msvcrt import libraries exist and returns the dir.
@@ -454,8 +542,29 @@ EXPORTS
 	return libDir, nil
 }
 
-// linkerArgs returns the linker binary and arguments for the given target and object file.
-func linkerArgs(target, objFile, outputPath string) (string, []string, error) {
+// linkerArgs returns the linker binary and arguments for the given target/arch
+// and object file. arm64 is currently only supported for the linux target; the
+// macOS arm64 ABI requires dynamic linking against libSystem plus code signing,
+// which the static assemble-and-link pipeline cannot provide.
+func linkerArgs(target, arch, objFile, outputPath string) (string, []string, error) {
+	if arch == "arm64" {
+		switch target {
+		case "darwin":
+			return "", nil, fmt.Errorf("--optimistic with --arch=arm64 --target=darwin is not supported: macOS arm64 requires dynamic linking against libSystem and code signing, which the static assemble-and-link pipeline cannot provide — use default (hex) mode for arm64 Mach-O output, or --arch=amd64 for --optimistic")
+		case "windows":
+			return "", nil, fmt.Errorf("--optimistic with --arch=arm64 --target=windows is not supported yet — use --arch=amd64")
+		default:
+			for _, linker := range []string{"aarch64-linux-gnu-ld", "ld.lld", "ld"} {
+				if _, err := exec.LookPath(linker); err == nil {
+					if linker == "aarch64-linux-gnu-ld" {
+						return linker, []string{objFile, "-o", outputPath}, nil
+					}
+					return linker, []string{"-m", "aarch64linux", objFile, "-o", outputPath}, nil
+				}
+			}
+			return "", nil, fmt.Errorf("no arm64-capable linker found — install binutils (e.g. aarch64-linux-gnu-ld) or lld")
+		}
+	}
 	switch target {
 	case "windows":
 		linker := "x86_64-w64-mingw32-ld"
@@ -487,16 +596,24 @@ func linkerArgs(target, objFile, outputPath string) (string, []string, error) {
 	}
 }
 
-func optimisticCompile(source string, prov providers.Provider, outputPath, target string, maxLoop, forceIterate int) ([]byte, error) {
-	if _, err := exec.LookPath("nasm"); err != nil {
-		return nil, fmt.Errorf("nasm not found in PATH — install it first (e.g. sudo pacman -S nasm)")
+func optimisticCompile(source string, prov providers.Provider, outputPath, target, arch string, maxLoop, forceIterate int) ([]byte, error) {
+	// Fail fast on unsupported arm64 target combinations before spending an LLM call.
+	if arch == "arm64" {
+		if _, _, err := linkerArgs(target, arch, "probe.o", outputPath); err != nil {
+			return nil, err
+		}
 	}
 
-	asm, err := prov.Stream(asmPromptFor(target, source), []string{"generating assembly"})
+	assemblerLabel := "nasm"
+	if arch == "arm64" {
+		assemblerLabel = "as"
+	}
+
+	asm, err := prov.Stream(asmPromptFor(target, arch, source), []string{"generating assembly"})
 	if err != nil {
 		return nil, err
 	}
-	asm = cleanAsm(asm)
+	asm = cleanAsm(asm, arch)
 
 	for attempt := 0; ; attempt++ {
 		asmFile, err := os.CreateTemp("", "sloppiler-*.asm")
@@ -512,27 +629,31 @@ func optimisticCompile(source string, prov providers.Provider, outputPath, targe
 		}
 		asmFile.Close()
 
-		progressIndicatorInstance := providers.StartSpinner("assembling with nasm")
-		nasmOut, nasmErr := exec.Command("nasm", "-f", nasmFormat(target), asmFile.Name(), "-o", objFile).CombinedOutput()
+		assembler, assemblerArgs, err := assembleCommand(target, arch, asmFile.Name(), objFile)
+		if err != nil {
+			return nil, err
+		}
+		progressIndicatorInstance := providers.StartSpinner(fmt.Sprintf("assembling with %s", assemblerLabel))
+		nasmOut, nasmErr := exec.Command(assembler, assemblerArgs...).CombinedOutput()
 		if nasmErr != nil {
 			progressIndicatorInstance.Fail()
 			fmt.Fprintf(os.Stderr, "\n%s\n", indent(string(nasmOut), "    "))
 			if attempt >= maxLoop {
 				fmt.Fprintf(os.Stderr, "  %sassembly:%s\n%s\n", dim, reset, indent(asm, "    "))
-				return nil, fmt.Errorf("nasm failed after %d attempt(s)", attempt+1)
+				return nil, fmt.Errorf("%s failed after %d attempt(s)", assemblerLabel, attempt+1)
 			}
 			fmt.Fprintf(os.Stderr, "  %s↻%s  loop %d/%d — re-aligning LLM outputs with ground truth\n\n", yellow, reset, attempt+1, maxLoop)
-			asm, err = prov.Stream(fixPromptFor(target, string(nasmOut), asm),
+			asm, err = prov.Stream(fixPromptFor(target, arch, string(nasmOut), asm),
 				[]string{fmt.Sprintf("fixing assembly (attempt %d/%d)", attempt+1, maxLoop)})
 			if err != nil {
 				return nil, err
 			}
-			asm = cleanAsm(asm)
+			asm = cleanAsm(asm, arch)
 			continue
 		}
 		progressIndicatorInstance.OK()
 
-		linker, args, err := linkerArgs(target, objFile, outputPath)
+		linker, args, err := linkerArgs(target, arch, objFile, outputPath)
 		if err != nil {
 			return nil, err
 		}
@@ -552,12 +673,12 @@ func optimisticCompile(source string, prov providers.Provider, outputPath, targe
 		if forceIterate > 0 {
 			forceIterate--
 			fmt.Fprintf(os.Stderr, "  %s⟳%s  force-iterate — proactively enhancing output quality (%d remaining)\n\n", cyan, reset, forceIterate)
-			asm, err = prov.Stream(improvePromptFor(target, asm),
+			asm, err = prov.Stream(improvePromptFor(target, arch, asm),
 				[]string{fmt.Sprintf("enhancing assembly (%d remaining)", forceIterate)})
 			if err != nil {
 				return nil, err
 			}
-			asm = cleanAsm(asm)
+			asm = cleanAsm(asm, arch)
 			continue
 		}
 		break
@@ -566,15 +687,15 @@ func optimisticCompile(source string, prov providers.Provider, outputPath, targe
 	return nil, nil
 }
 
-func slopCompile(source string, prov providers.Provider, target string, progressSteps []string) ([]byte, error) {
-	raw, err := prov.Stream(fmt.Sprintf(compilePromptFor(target), source), progressSteps)
+func slopCompile(source string, prov providers.Provider, target, arch string, progressSteps []string) ([]byte, error) {
+	raw, err := prov.Stream(compilePromptFor(target, arch, source), progressSteps)
 	if err != nil {
 		return nil, err
 	}
 
 	hexStr := extractHex(raw)
 
-	wrap := wrapperFor(target)
+	wrap := wrapperFor(target, arch)
 
 	if len(hexStr) < 8 {
 		fmt.Fprintf(os.Stderr, "  %s⚠%s  model output deviates from expected schema — applying fallback remediation\n", yellow, reset)
@@ -600,32 +721,37 @@ func slopCompile(source string, prov providers.Provider, target string, progress
 	return wrap(payload), nil
 }
 
-func wrapperFor(target string) func([]byte) []byte {
+func wrapperFor(target, arch string) func([]byte) []byte {
 	switch target {
 	case "windows":
-		return wrapInPE
+		return func(payload []byte) []byte { return wrapInPE(payload, arch) }
 	case "darwin":
-		return wrapInMachO
+		return func(payload []byte) []byte { return wrapInMachO(payload, arch) }
 	default:
-		return wrapInElf
+		return func(payload []byte) []byte { return wrapInElf(payload, arch) }
 	}
 }
 
 // ── ELF wrapper ───────────────────────────────────────────────────────────────
 
-func wrapInElf(payload []byte) []byte {
+func wrapInElf(payload []byte, arch string) []byte {
 	const loadAddr = 0x400000
 	const codeOffset = 0x78
 
 	entryPoint := uint64(loadAddr + codeOffset)
 	fileSize := uint64(codeOffset + len(payload))
 
+	// e_machine: 0x3e (62) = x86-64, 0xb7 (183) = AArch64.
+	eMachine := byte(0x3e)
+	if arch == "arm64" {
+		eMachine = 0xb7
+	}
 	hdr := []byte{
 		0x7f, 'E', 'L', 'F',
 		2, 1, 1, 0,
 		0, 0, 0, 0, 0, 0, 0, 0,
 		2, 0,
-		0x3e, 0,
+		eMachine, 0,
 		1, 0, 0, 0,
 	}
 	hdr = appendU64(hdr, entryPoint)
@@ -660,7 +786,7 @@ func appendU64(b []byte, v uint64) []byte {
 
 // ── PE wrapper (Windows) ──────────────────────────────────────────────────────
 
-func wrapInPE(payload []byte) []byte {
+func wrapInPE(payload []byte, arch string) []byte {
 	const fileAlign = 0x200
 	const sectAlign = 0x1000
 	const codeRVA = 0x1000
@@ -668,6 +794,12 @@ func wrapInPE(payload []byte) []byte {
 
 	rawSize := uint32((len(payload) + fileAlign - 1) &^ (fileAlign - 1))
 	imageSize := uint32((codeRVA + int(rawSize) + sectAlign - 1) &^ (sectAlign - 1))
+
+	// COFF Machine: 0x8664 = AMD64, 0xaa64 = ARM64.
+	coffMachine := uint16(0x8664)
+	if arch == "arm64" {
+		coffMachine = 0xaa64
+	}
 
 	var b []byte
 
@@ -680,56 +812,56 @@ func wrapInPE(payload []byte) []byte {
 	b = append(b, 'P', 'E', 0, 0)
 
 	// COFF header (20 bytes)
-	b = appendU16(b, 0x8664) // AMD64
-	b = appendU16(b, 1)      // NumberOfSections
-	b = appendU32(b, 0)      // TimeDateStamp
-	b = appendU32(b, 0)      // PointerToSymbolTable
-	b = appendU32(b, 0)      // NumberOfSymbols
-	b = appendU16(b, 240)    // SizeOfOptionalHeader (PE32+ base 112 + 128 data dirs)
-	b = appendU16(b, 0x0022) // Characteristics: executable
+	b = appendU16(b, coffMachine) // AMD64 / ARM64
+	b = appendU16(b, 1)           // NumberOfSections
+	b = appendU32(b, 0)           // TimeDateStamp
+	b = appendU32(b, 0)           // PointerToSymbolTable
+	b = appendU32(b, 0)           // NumberOfSymbols
+	b = appendU16(b, 240)         // SizeOfOptionalHeader (PE32+ base 112 + 128 data dirs)
+	b = appendU16(b, 0x0022)      // Characteristics: executable
 
 	// Optional header PE32+ (112 bytes base)
-	b = appendU16(b, 0x020B)              // Magic PE32+
-	b = append(b, 0, 0)                   // linker version
-	b = appendU32(b, rawSize)             // SizeOfCode
-	b = appendU32(b, 0)                   // SizeOfInitializedData
-	b = appendU32(b, 0)                   // SizeOfUninitializedData
-	b = appendU32(b, uint32(codeRVA))     // AddressOfEntryPoint
-	b = appendU32(b, uint32(codeRVA))     // BaseOfCode
-	b = appendU64(b, imageBase)           // ImageBase
-	b = appendU32(b, uint32(sectAlign))   // SectionAlignment
-	b = appendU32(b, uint32(fileAlign))   // FileAlignment
-	b = appendU16(b, 6)                   // MajorOSVersion
-	b = appendU16(b, 0)                   // MinorOSVersion
-	b = appendU16(b, 0)                   // MajorImageVersion
-	b = appendU16(b, 0)                   // MinorImageVersion
-	b = appendU16(b, 6)                   // MajorSubsystemVersion
-	b = appendU16(b, 0)                   // MinorSubsystemVersion
-	b = appendU32(b, 0)                   // Win32VersionValue
-	b = appendU32(b, imageSize)           // SizeOfImage
-	b = appendU32(b, uint32(fileAlign))   // SizeOfHeaders
-	b = appendU32(b, 0)                   // CheckSum
-	b = appendU16(b, 3)                   // Subsystem: CUI
-	b = appendU16(b, 0)                   // DllCharacteristics
-	b = appendU64(b, 0x100000)            // SizeOfStackReserve
-	b = appendU64(b, 0x1000)             // SizeOfStackCommit
-	b = appendU64(b, 0x100000)            // SizeOfHeapReserve
-	b = appendU64(b, 0x1000)             // SizeOfHeapCommit
-	b = appendU32(b, 0)                   // LoaderFlags
-	b = appendU32(b, 16)                  // NumberOfRvaAndSizes
-	b = append(b, make([]byte, 128)...)   // DataDirectory (16 * 8 bytes, all zero)
+	b = appendU16(b, 0x020B)            // Magic PE32+
+	b = append(b, 0, 0)                 // linker version
+	b = appendU32(b, rawSize)           // SizeOfCode
+	b = appendU32(b, 0)                 // SizeOfInitializedData
+	b = appendU32(b, 0)                 // SizeOfUninitializedData
+	b = appendU32(b, uint32(codeRVA))   // AddressOfEntryPoint
+	b = appendU32(b, uint32(codeRVA))   // BaseOfCode
+	b = appendU64(b, imageBase)         // ImageBase
+	b = appendU32(b, uint32(sectAlign)) // SectionAlignment
+	b = appendU32(b, uint32(fileAlign)) // FileAlignment
+	b = appendU16(b, 6)                 // MajorOSVersion
+	b = appendU16(b, 0)                 // MinorOSVersion
+	b = appendU16(b, 0)                 // MajorImageVersion
+	b = appendU16(b, 0)                 // MinorImageVersion
+	b = appendU16(b, 6)                 // MajorSubsystemVersion
+	b = appendU16(b, 0)                 // MinorSubsystemVersion
+	b = appendU32(b, 0)                 // Win32VersionValue
+	b = appendU32(b, imageSize)         // SizeOfImage
+	b = appendU32(b, uint32(fileAlign)) // SizeOfHeaders
+	b = appendU32(b, 0)                 // CheckSum
+	b = appendU16(b, 3)                 // Subsystem: CUI
+	b = appendU16(b, 0)                 // DllCharacteristics
+	b = appendU64(b, 0x100000)          // SizeOfStackReserve
+	b = appendU64(b, 0x1000)            // SizeOfStackCommit
+	b = appendU64(b, 0x100000)          // SizeOfHeapReserve
+	b = appendU64(b, 0x1000)            // SizeOfHeapCommit
+	b = appendU32(b, 0)                 // LoaderFlags
+	b = appendU32(b, 16)                // NumberOfRvaAndSizes
+	b = append(b, make([]byte, 128)...) // DataDirectory (16 * 8 bytes, all zero)
 
 	// Section header for .text (40 bytes)
 	b = append(b, '.', 't', 'e', 'x', 't', 0, 0, 0) // Name
-	b = appendU32(b, uint32(len(payload)))            // VirtualSize
-	b = appendU32(b, uint32(codeRVA))                 // VirtualAddress
-	b = appendU32(b, rawSize)                         // SizeOfRawData
-	b = appendU32(b, uint32(fileAlign))               // PointerToRawData
-	b = appendU32(b, 0)                               // PointerToRelocations
-	b = appendU32(b, 0)                               // PointerToLinenumbers
-	b = appendU16(b, 0)                               // NumberOfRelocations
-	b = appendU16(b, 0)                               // NumberOfLinenumbers
-	b = appendU32(b, 0x60000020)                      // Characteristics: code, executable, readable
+	b = appendU32(b, uint32(len(payload)))          // VirtualSize
+	b = appendU32(b, uint32(codeRVA))               // VirtualAddress
+	b = appendU32(b, rawSize)                       // SizeOfRawData
+	b = appendU32(b, uint32(fileAlign))             // PointerToRawData
+	b = appendU32(b, 0)                             // PointerToRelocations
+	b = appendU32(b, 0)                             // PointerToLinenumbers
+	b = appendU16(b, 0)                             // NumberOfRelocations
+	b = appendU16(b, 0)                             // NumberOfLinenumbers
+	b = appendU32(b, 0x60000020)                    // Characteristics: code, executable, readable
 
 	// Pad headers to fileAlign (0x200)
 	b = append(b, make([]byte, fileAlign-len(b))...)
@@ -743,14 +875,22 @@ func wrapInPE(payload []byte) []byte {
 
 // ── Mach-O wrapper (macOS) ────────────────────────────────────────────────────
 
-func wrapInMachO(payload []byte) []byte {
+func wrapInMachO(payload []byte, arch string) []byte {
 	const pageSize = 0x1000
 	const vmBase = uint64(0x100000000)
 	const codeFileOff = uint64(pageSize) // code starts at second page
 
-	vmsize := uint64((int(codeFileOff)+len(payload)+pageSize-1) &^ (pageSize - 1))
+	vmsize := uint64((int(codeFileOff) + len(payload) + pageSize - 1) &^ (pageSize - 1))
 	filesize := codeFileOff + uint64(len(payload))
 	codeVMAddr := vmBase + codeFileOff
+
+	// cputype/cpusubtype: x86_64 = (0x01000007, 3), arm64 = (0x0100000C, 0).
+	cpuType := uint32(0x01000007)
+	cpuSubtype := uint32(3)
+	if arch == "arm64" {
+		cpuType = 0x0100000C
+		cpuSubtype = 0
+	}
 
 	// load command sizes
 	const segCmdSize = 72 + 80 // LC_SEGMENT_64 + one section_64
@@ -760,51 +900,51 @@ func wrapInMachO(payload []byte) []byte {
 	var b []byte
 
 	// mach_header_64 (32 bytes)
-	b = appendU32(b, 0xFEEDFACF)  // magic
-	b = appendU32(b, 0x01000007)  // cputype: CPU_TYPE_X86_64
-	b = appendU32(b, 3)           // cpusubtype
-	b = appendU32(b, 2)           // filetype: MH_EXECUTE
-	b = appendU32(b, 2)           // ncmds
-	b = appendU32(b, sizeofcmds)  // sizeofcmds
-	b = appendU32(b, 0x00000001)  // flags: MH_NOUNDEFS
-	b = appendU32(b, 0)           // reserved
+	b = appendU32(b, 0xFEEDFACF) // magic
+	b = appendU32(b, cpuType)    // cputype: x86_64 / arm64
+	b = appendU32(b, cpuSubtype) // cpusubtype
+	b = appendU32(b, 2)          // filetype: MH_EXECUTE
+	b = appendU32(b, 2)          // ncmds
+	b = appendU32(b, sizeofcmds) // sizeofcmds
+	b = appendU32(b, 0x00000001) // flags: MH_NOUNDEFS
+	b = appendU32(b, 0)          // reserved
 
 	// LC_SEGMENT_64 (72 bytes)
-	b = appendU32(b, 0x19)           // cmd: LC_SEGMENT_64
-	b = appendU32(b, segCmdSize)     // cmdsize
+	b = appendU32(b, 0x19)       // cmd: LC_SEGMENT_64
+	b = appendU32(b, segCmdSize) // cmdsize
 	segname := [16]byte{}
 	copy(segname[:], "__TEXT")
 	b = append(b, segname[:]...)
-	b = appendU64(b, vmBase)         // vmaddr
-	b = appendU64(b, vmsize)         // vmsize
-	b = appendU64(b, 0)              // fileoff
-	b = appendU64(b, filesize)       // filesize
-	b = appendU32(b, 7)              // maxprot: rwx
-	b = appendU32(b, 5)              // initprot: r-x
-	b = appendU32(b, 1)              // nsects
-	b = appendU32(b, 0)              // flags
+	b = appendU64(b, vmBase)   // vmaddr
+	b = appendU64(b, vmsize)   // vmsize
+	b = appendU64(b, 0)        // fileoff
+	b = appendU64(b, filesize) // filesize
+	b = appendU32(b, 7)        // maxprot: rwx
+	b = appendU32(b, 5)        // initprot: r-x
+	b = appendU32(b, 1)        // nsects
+	b = appendU32(b, 0)        // flags
 
 	// section_64 __text (80 bytes)
 	sectname := [16]byte{}
 	copy(sectname[:], "__text")
 	b = append(b, sectname[:]...)
 	b = append(b, segname[:]...)
-	b = appendU64(b, codeVMAddr)     // addr
+	b = appendU64(b, codeVMAddr)           // addr
 	b = appendU64(b, uint64(len(payload))) // size
 	b = appendU32(b, uint32(codeFileOff))  // offset
-	b = appendU32(b, 4)              // align: 2^4
-	b = appendU32(b, 0)              // reloff
-	b = appendU32(b, 0)              // nreloc
-	b = appendU32(b, 0x80000400)     // flags: PURE_INSTRUCTIONS
-	b = appendU32(b, 0)              // reserved1
-	b = appendU32(b, 0)              // reserved2
-	b = appendU32(b, 0)              // reserved3
+	b = appendU32(b, 4)                    // align: 2^4
+	b = appendU32(b, 0)                    // reloff
+	b = appendU32(b, 0)                    // nreloc
+	b = appendU32(b, 0x80000400)           // flags: PURE_INSTRUCTIONS
+	b = appendU32(b, 0)                    // reserved1
+	b = appendU32(b, 0)                    // reserved2
+	b = appendU32(b, 0)                    // reserved3
 
 	// LC_MAIN (24 bytes)
-	b = appendU32(b, 0x80000028)     // cmd: LC_MAIN
-	b = appendU32(b, mainCmdSize)    // cmdsize
-	b = appendU64(b, codeFileOff)    // entryoff (from file start of segment)
-	b = appendU64(b, 0)              // stacksize
+	b = appendU32(b, 0x80000028)  // cmd: LC_MAIN
+	b = appendU32(b, mainCmdSize) // cmdsize
+	b = appendU64(b, codeFileOff) // entryoff (from file start of segment)
+	b = appendU64(b, 0)           // stacksize
 
 	// Pad to page boundary
 	b = append(b, make([]byte, pageSize-len(b))...)
@@ -817,12 +957,17 @@ func wrapInMachO(payload []byte) []byte {
 
 // ── ASM cleaning ──────────────────────────────────────────────────────────────
 
-func cleanAsm(asm string) string {
+func cleanAsm(asm, arch string) string {
 	asm = strings.TrimSpace(asm)
-	for _, fence := range []string{"```nasm", "```asm", "```x86", "```", "`"} {
+	for _, fence := range []string{"```nasm", "```asm", "```x86", "```arm", "```aarch64", "```s", "```", "`"} {
 		asm = strings.ReplaceAll(asm, fence, "")
 	}
 	asm = strings.TrimSpace(asm)
+	// arm64 uses GNU as syntax — the NASM-specific transforms below (MASM dup
+	// fixups, BITS directive injection) do not apply.
+	if arch == "arm64" {
+		return asm
+	}
 	asm = stripProseTrailer(asm)
 	asm = fixMasmisms(asm)
 	if strings.Contains(strings.ToUpper(asm), "BITS 32") {
